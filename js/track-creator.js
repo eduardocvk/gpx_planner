@@ -979,7 +979,16 @@ async function saveCreatedTrack() {
       trackData.id = creator.editingTrackId;
     }
 
-    await saveTrackToDB(trackData);
+    const saveResult = await saveTrackToDB(trackData);
+
+    if (saveResult.cancelled) {
+      if (statusEl) {
+        statusEl.className = 'text-xs font-bold text-gray-500';
+        statusEl.textContent = 'Guardado cancelado';
+      }
+      btn.disabled = false;
+      return;
+    }
 
     if (typeof loadHistory === 'function') {
       await loadHistory();
@@ -987,7 +996,9 @@ async function saveCreatedTrack() {
 
     if (statusEl) {
       statusEl.className = 'text-xs font-bold text-green-600';
-      statusEl.textContent = creator.editingTrackId ? '✓ Track actualizado' : '✓ Guardado en Mis Tracks';
+      statusEl.textContent = saveResult.overwritten
+        ? '✓ Track sobrescrito'
+        : creator.editingTrackId ? '✓ Track actualizado' : '✓ Guardado en Mis Tracks';
       setTimeout(() => { statusEl.textContent = ''; }, 3000);
     }
     btn.disabled = false;
@@ -1267,54 +1278,6 @@ function escapeXml(str) {
 // =============================================
 // 10. SAVE & DOWNLOAD
 // =============================================
-
-async function saveCreatedTrack() {
-  if (creator.waypoints.length < 2) return;
-
-  const nameInput = document.getElementById('creatorTrackName');
-  const name = (nameInput?.value || '').trim() || 'Track creado ' + new Date().toLocaleDateString('es-ES');
-
-  const gpxContent = generateCreatorGPX(name);
-  if (!gpxContent) return;
-
-  const btn = document.getElementById('btnSaveCreated');
-  const statusEl = document.getElementById('creatorSaveStatus');
-  btn.disabled = true;
-  if (statusEl) {
-    statusEl.className = 'text-xs font-bold text-blue-600 animate-pulse';
-    statusEl.textContent = 'Guardando...';
-  }
-
-  try {
-    // Parse the generated GPX to get stats (reuse global parseGPX)
-    const parsed = parseGPX(gpxContent);
-
-    await saveTrackToDB({
-      fecha: new Date().toISOString(),
-      nombre: parsed.nombre,
-      distancia: parsed.distancia,
-      desnivelPositivo: parsed.desnivelPositivo,
-      desnivelNegativo: parsed.desnivelNegativo,
-      altitudMax: parsed.altitudMax,
-      altitudMin: parsed.altitudMin,
-      gpxContent: gpxContent
-    });
-
-    if (statusEl) {
-      statusEl.className = 'text-xs font-bold text-green-600';
-      statusEl.textContent = '✓ Guardado en Mis Tracks';
-      setTimeout(() => { statusEl.textContent = ''; }, 3000);
-    }
-    btn.disabled = false;
-  } catch (err) {
-    console.error('Save error:', err);
-    if (statusEl) {
-      statusEl.className = 'text-xs font-bold text-red-600';
-      statusEl.textContent = '✕ Error al guardar';
-    }
-    btn.disabled = false;
-  }
-}
 
 function downloadCreatedTrack() {
   if (creator.waypoints.length < 2) return;

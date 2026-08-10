@@ -9,10 +9,13 @@ Analizador de rutas GPX con mapas interactivos y perfiles altimétricos coloread
 - 📊 **Perfil altimétrico** coloreado por pendiente (ECharts)
 - ⛰️ **Detección automática de subidas y puertos** con categoría, desnivel y pendientes
 - 📍 **Ubicación GPS sobre la ruta** con distancia al track y kilómetro más cercano
+- 🛣️ **Porcentaje estimado de asfalto, pista y sendero** a partir de OpenStreetMap
+- 🎨 **Comparación multitrack** con varias rutas y colores en un mismo mapa
 - ✏️ **Creador y editor de rutas** con inversión, eliminación de puntos y variantes
 - 🖼️ **Miniaturas con silueta y perfil** de los tracks guardados
 - 💾 **Guardado local y en la nube** (IndexedDB + Supabase)
 - 🔄 **Sincronización entre móvil y ordenador** mediante acceso seguro por correo
+- ↗️ **Envío de GPX a Garmin Connect** mediante el menú nativo de Android
 - 📱 **PWA instalable** en Android, iOS y escritorio
 - 📶 **Funciona offline** (Service Worker)
 
@@ -41,3 +44,17 @@ Analizador de rutas GPX con mapas interactivos y perfiles altimétricos coloread
 Hospedado en GitHub Pages: [https://eduardocvk.github.io/gpx_analizador/](https://eduardocvk.github.io/gpx_analizador/)
 
 La base de datos se versiona mediante las migraciones incluidas en `supabase/migrations`.
+
+## Integraciones de rutas
+
+### Garmin
+
+La aplicación permite enviar cualquier GPX desde Android con **Garmin / compartir**. Usa el menú nativo del sistema; con Garmin Connect instalado se puede escoger como destino y guardar el archivo como recorrido. En escritorio descarga el GPX para importarlo en Garmin Connect Web.
+
+Una sincronización automática completa requiere el [Garmin Connect Developer Program](https://developer.garmin.com/gc-developer-program/overview/):
+
+- **Courses API** para publicar recorridos en Garmin Connect y sincronizarlos con dispositivos compatibles.
+- **Activity API** para recibir actividades realizadas, disponibles también como FIT, GPX o TCX.
+- Aprobación de Garmin para uso empresarial, OAuth 2.0 y un backend seguro. En este proyecto el backend podría implementarse con Supabase Edge Functions; los secretos no deben incluirse en el frontend estático.
+
+Garmin no ofrece una API pública de consumo que permita leer y escribir los recorridos privados de una cuenta personal sin esa aprobación. Como alternativa futura, la API oficial de Strava sí permite listar rutas propias y exportarlas como GPX mediante OAuth.

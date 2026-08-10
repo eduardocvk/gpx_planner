@@ -19,10 +19,16 @@ let gpsMarker = null;
 let gpsAccuracyCircle = null;
 let gpsRouteConnector = null;
 let gpsNearestMarker = null;
+let gpsLastPosition = null;
 let fileContent = '';
 let fileName = '';
 let deferredPrompt = null;
 let currentAnalyzedTrack = null;
+let surfaceAnalysisRequestId = 0;
+const selectedTrackIds = new Set();
+const historyTracksById = new Map();
+let trackCompareMap = null;
+let trackCompareLayers = [];
 
 
 // =============================================
@@ -321,6 +327,23 @@ async function getLocalTracks() {
   });
 }
 
+function normalizeTrackName(name) {
+  return String(name || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('es');
+}
+
+async function deleteLocalTrackIds(ids) {
+  if (!ids?.length) return;
+  const keys = new Set(ids.flatMap(id => [id, String(id), !isNaN(id) ? Number(id) : id]));
+  const db = await openDB();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    keys.forEach(id => store.delete(id));
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 async function getAllTracks() {
   // 1. Try to fetch latest tracks from cloud
   const cloudTracks = await getCloudTracks();
@@ -337,22 +360,54 @@ async function getAllTracks() {
 }
 
 async function saveTrackToDB(track) {
+  const localTracks = await getLocalTracks();
+  const normalizedName = normalizeTrackName(track.nombre);
+  const sameNameTracks = localTracks
+    .filter(existing => normalizeTrackName(existing.nombre) === normalizedName)
+    .sort((a, b) => new Date(b.updatedAt || b.fecha || 0) - new Date(a.updatedAt || a.fecha || 0));
+
+  const currentId = track.id !== undefined && track.id !== null ? String(track.id) : null;
+  const targetExists = currentId && sameNameTracks.some(existing => String(existing.id) === currentId);
+  const willOverwrite = sameNameTracks.length > 0 && (!currentId || targetExists || sameNameTracks.some(existing => String(existing.id) !== currentId));
+
+  if (willOverwrite) {
+    const duplicateCount = sameNameTracks.length;
+    const message = duplicateCount > 1
+      ? `Ya existen ${duplicateCount} tracks llamados “${track.nombre}”. Se conservará uno y se sobrescribirá con esta versión. ¿Continuar?`
+      : `Ya existe un track llamado “${track.nombre}”. Se sobrescribirá y solo quedará una copia. ¿Continuar?`;
+    if (!confirm(message)) return { cancelled: true, cloudSaved: Boolean(cloudSession?.user) };
+  }
+
   if (!track.id) {
-    track.id = Date.now() + Math.floor(Math.random() * 1000);
+    track.id = sameNameTracks[0]?.id || (Date.now() + Math.floor(Math.random() * 1000));
   }
   track.updatedAt = new Date().toISOString();
 
-  // Save to local IndexedDB
   await saveTrackToLocalDB(track);
 
-  // Sync current list when the user has connected this device.
+  const duplicateIds = sameNameTracks
+    .filter(existing => String(existing.id) !== String(track.id))
+    .map(existing => existing.id);
+  await deleteLocalTrackIds(duplicateIds);
+
   if (cloudSession?.user) {
+    if (duplicateIds.length) {
+      const { error: deleteError } = await supabaseClient
+        .from('tracks')
+        .delete()
+        .in('id', duplicateIds.map(String));
+      if (deleteError) throw deleteError;
+    }
     const allLocal = await getLocalTracks();
     const result = await syncTracksToCloud(allLocal);
     if (!result.ok) throw new Error(result.message || 'No se pudo sincronizar');
   }
 
-  return { cloudSaved: Boolean(cloudSession?.user) };
+  return {
+    cloudSaved: Boolean(cloudSession?.user),
+    overwritten: willOverwrite,
+    id: track.id
+  };
 }
 
 async function deleteTrackFromDB(id) {
@@ -452,6 +507,189 @@ function parseGPX(text) {
     altitudMax: Math.round(Math.max(...points.map(p => p.ele))),
     altitudMin: Math.round(Math.min(...points.map(p => p.ele)))
   };
+}
+
+// Surface percentages are an estimate: GPX does not normally contain this
+// information, so nearby OpenStreetMap ways are matched to sampled track points.
+const SURFACE_TYPES = {
+  asphalt: { label: 'Asfalto', color: '#334155' },
+  track: { label: 'Pista', color: '#d97706' },
+  trail: { label: 'Sendero', color: '#16a34a' },
+  unknown: { label: 'Sin datos', color: '#cbd5e1' }
+};
+
+function classifyOSMWay(tags = {}) {
+  const highway = String(tags.highway || '').toLowerCase();
+  const surface = String(tags.surface || '').toLowerCase();
+  const paved = ['asphalt', 'paved', 'concrete', 'concrete:plates', 'concrete:lanes', 'paving_stones', 'sett', 'cobblestone'];
+  const unpaved = ['unpaved', 'gravel', 'fine_gravel', 'compacted', 'dirt', 'earth', 'ground', 'sand', 'mud', 'grass', 'woodchips', 'rock'];
+
+  if (['path', 'footway', 'bridleway', 'steps'].includes(highway)) return 'trail';
+  if (highway === 'track') return 'track';
+  if (paved.includes(surface)) return 'asphalt';
+  if (unpaved.includes(surface)) return 'track';
+  if (['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'residential', 'living_street', 'service', 'unclassified', 'cycleway'].includes(highway)) return 'asphalt';
+  return 'unknown';
+}
+
+function pointToSegmentMeters(point, start, end) {
+  const meanLat = (point.lat + start.lat + end.lat) / 3 * Math.PI / 180;
+  const scaleX = 111320 * Math.cos(meanLat);
+  const scaleY = 110540;
+  const px = point.lon * scaleX;
+  const py = point.lat * scaleY;
+  const ax = start.lon * scaleX;
+  const ay = start.lat * scaleY;
+  const bx = end.lon * scaleX;
+  const by = end.lat * scaleY;
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lengthSquared = dx * dx + dy * dy;
+  const ratio = lengthSquared ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSquared)) : 0;
+  return Math.hypot(px - (ax + ratio * dx), py - (ay + ratio * dy));
+}
+
+function samplePointsForSurface(points) {
+  if (!points?.length) return [];
+  const totalDistance = points[points.length - 1].distance || 0;
+  const step = Math.max(0.15, totalDistance / 70);
+  const samples = [];
+  for (let distance = 0; distance < totalDistance; distance += step) {
+    samples.push(interpolateTrackPoint(points, distance));
+  }
+  samples.push(interpolateTrackPoint(points, totalDistance));
+  return samples.filter(Boolean);
+}
+
+function getSurfaceCacheKey(points) {
+  if (!points?.length) return '';
+  const first = points[0];
+  const last = points[points.length - 1];
+  return `surface:${first.lat.toFixed(4)},${first.lon.toFixed(4)}:${last.lat.toFixed(4)},${last.lon.toFixed(4)}:${(last.distance || 0).toFixed(1)}`;
+}
+
+function renderSurfaceSummary(summary, message = '') {
+  const section = document.getElementById('surfaceSection');
+  const status = document.getElementById('surfaceStatus');
+  const bar = document.getElementById('surfaceBar');
+  const legend = document.getElementById('surfaceLegend');
+  if (!section || !status || !bar || !legend) return;
+  section.classList.remove('hidden');
+  status.textContent = message;
+
+  if (!summary) {
+    bar.innerHTML = '<span class="surface-loading"></span>';
+    legend.innerHTML = '';
+    return;
+  }
+
+  bar.innerHTML = Object.entries(SURFACE_TYPES).map(([key, meta]) => {
+    const percentage = Number(summary[key]?.percentage || 0);
+    return percentage > 0
+      ? `<span style="width:${percentage}%;background:${meta.color}" title="${meta.label}: ${percentage.toFixed(1)}%"></span>`
+      : '';
+  }).join('');
+
+  legend.innerHTML = Object.entries(SURFACE_TYPES).map(([key, meta]) => {
+    const item = summary[key] || { percentage: 0, km: 0 };
+    return `<div class="surface-legend-item">
+      <span class="surface-dot" style="background:${meta.color}"></span>
+      <span>${meta.label}</span>
+      <strong>${item.percentage.toFixed(1)}%</strong>
+      <small>${item.km.toFixed(1)} km</small>
+    </div>`;
+  }).join('');
+}
+
+async function fetchOSMWaysForSurface(samples) {
+  const wayQueries = samples.map(point => `way(around:35,${point.lat.toFixed(6)},${point.lon.toFixed(6)})["highway"];`).join('\n');
+  const query = `[out:json][timeout:25];(${wayQueries});out tags geom;`;
+  const endpoints = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter'
+  ];
+  let lastError = null;
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+        body: `data=${encodeURIComponent(query)}`
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      return (data.elements || []).filter(element => element.type === 'way' && element.geometry?.length > 1);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('OpenStreetMap no respondió');
+}
+
+async function analyzeRouteSurface(points, savedSummary = null) {
+  const requestId = ++surfaceAnalysisRequestId;
+  if (savedSummary) {
+    parsedData.surfaceSummary = savedSummary;
+    renderSurfaceSummary(savedSummary, 'Guardado con el track');
+    return;
+  }
+
+  const cacheKey = getSurfaceCacheKey(points);
+  try {
+    const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+    if (cached?.summary && Date.now() - cached.savedAt < 7 * 24 * 60 * 60 * 1000) {
+      parsedData.surfaceSummary = cached.summary;
+      renderSurfaceSummary(cached.summary, 'Estimación OSM en caché');
+      return;
+    }
+  } catch (_) {}
+
+  renderSurfaceSummary(null, 'Consultando OpenStreetMap…');
+  try {
+    const samples = samplePointsForSurface(points);
+    const ways = await fetchOSMWaysForSurface(samples);
+    if (requestId !== surfaceAnalysisRequestId) return;
+
+    const distances = { asphalt: 0, track: 0, trail: 0, unknown: 0 };
+    for (let index = 0; index < samples.length - 1; index++) {
+      const point = samples[index];
+      const segmentKm = Math.max(0, samples[index + 1].distance - point.distance);
+      let nearestDistance = Infinity;
+      let nearestType = 'unknown';
+
+      for (const way of ways) {
+        const geometry = way.geometry;
+        for (let geoIndex = 1; geoIndex < geometry.length; geoIndex++) {
+          const distance = pointToSegmentMeters(point, geometry[geoIndex - 1], geometry[geoIndex]);
+          if (distance < nearestDistance) {
+            nearestDistance = distance;
+            nearestType = classifyOSMWay(way.tags);
+          }
+        }
+      }
+      distances[nearestDistance <= 55 ? nearestType : 'unknown'] += segmentKm;
+    }
+
+    const total = Object.values(distances).reduce((sum, value) => sum + value, 0) || 1;
+    const summary = Object.fromEntries(Object.entries(distances).map(([key, km]) => [key, {
+      km,
+      percentage: km / total * 100
+    }]));
+    parsedData.surfaceSummary = summary;
+    if (currentAnalyzedTrack) currentAnalyzedTrack.surfaceSummary = summary;
+    try { localStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), summary })); } catch (_) {}
+    renderSurfaceSummary(summary, 'Estimación OSM');
+  } catch (error) {
+    if (requestId !== surfaceAnalysisRequestId) return;
+    console.warn('Surface analysis error:', error);
+    const unknownSummary = {
+      asphalt: { km: 0, percentage: 0 },
+      track: { km: 0, percentage: 0 },
+      trail: { km: 0, percentage: 0 },
+      unknown: { km: points.at(-1)?.distance || 0, percentage: 100 }
+    };
+    renderSurfaceSummary(unknownSummary, 'No se pudo consultar OSM');
+  }
 }
 
 
@@ -882,11 +1120,13 @@ function stopTrackLocation() {
 function updateTrackLocation(position) {
   if (!map || !parsedData) return;
   const { latitude, longitude, accuracy } = position.coords;
+  gpsLastPosition = position;
   const latLng = [latitude, longitude];
   const nearest = findNearestRoutePointToLocation(latitude, longitude);
   if (!nearest) return;
 
-  if (!gpsMarker) {
+  const isFirstFix = !gpsMarker;
+  if (isFirstFix) {
     const icon = L.divIcon({
       html: '<div class="gps-position-marker"></div>',
       className: '',
@@ -932,7 +1172,36 @@ function updateTrackLocation(position) {
     direction: 'top',
     offset: [0, -10]
   });
-  map.panInside(L.latLng(latitude, longitude), { padding: [45, 45] });
+  if (isFirstFix) map.flyTo(latLng, Math.max(map.getZoom(), 16), { duration: 0.8 });
+  else map.panInside(L.latLng(latitude, longitude), { padding: [45, 45] });
+}
+
+function centerMapOnCurrentLocation() {
+  if (!map) return;
+  if (!navigator.geolocation) {
+    setTrackLocationStatus('Este dispositivo no permite obtener la ubicación.', true);
+    return;
+  }
+
+  const centerPosition = position => {
+    gpsLastPosition = position;
+    const { latitude, longitude } = position.coords;
+    map.flyTo([latitude, longitude], Math.max(map.getZoom(), 16), { duration: 0.8 });
+    if (parsedData) updateTrackLocation(position);
+    else setTrackLocationStatus(`Ubicación encontrada · ±${Math.round(position.coords.accuracy || 0)} m`);
+  };
+
+  if (gpsLastPosition && Date.now() - gpsLastPosition.timestamp < 30000) {
+    centerPosition(gpsLastPosition);
+    return;
+  }
+
+  setTrackLocationStatus('Buscando ubicación…');
+  navigator.geolocation.getCurrentPosition(
+    centerPosition,
+    error => setTrackLocationStatus(error.code === 1 ? 'Permiso de ubicación denegado.' : 'No se pudo obtener la ubicación.', true),
+    { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
+  );
 }
 
 function toggleTrackLocation() {
@@ -1233,6 +1502,7 @@ function processAndDisplay(gpxText, name, sourceTrack = null) {
     renderChart();
     detectedClimbs = detectClimbs(parsedData.puntos);
     renderDetectedClimbs(detectedClimbs);
+    analyzeRouteSurface(parsedData.puntos, sourceTrack?.surfaceSummary);
     setTimeout(() => fitAnalyzedRoute(), 180);
   } catch (err) {
     alert('Error procesando GPX: ' + err.message);
@@ -1302,6 +1572,7 @@ async function saveCurrentTrack() {
 
   try {
     const saveResult = await saveTrackToDB({
+      ...(currentAnalyzedTrack?.id !== undefined ? { id: currentAnalyzedTrack.id } : {}),
       fecha: new Date().toISOString(),
       nombre: parsedData.nombre,
       distancia: parsedData.distancia,
@@ -1309,13 +1580,23 @@ async function saveCurrentTrack() {
       desnivelNegativo: parsedData.desnivelNegativo,
       altitudMax: parsedData.altitudMax,
       altitudMin: parsedData.altitudMin,
+      surfaceSummary: parsedData.surfaceSummary || currentAnalyzedTrack?.surfaceSummary || null,
       gpxContent: fileContent
     });
+
+    if (saveResult.cancelled) {
+      status.className = 'text-xs font-bold text-gray-500 h-4';
+      status.textContent = 'Guardado cancelado';
+      btn.disabled = false;
+      return;
+    }
 
     await loadHistory();
 
     status.className = 'text-xs font-bold text-green-600 h-4';
-    status.textContent = saveResult.cloudSaved ? '✓ Guardado en la nube' : '✓ Guardado local';
+    status.textContent = saveResult.overwritten
+      ? '✓ Track sobrescrito'
+      : saveResult.cloudSaved ? '✓ Guardado en la nube' : '✓ Guardado local';
   } catch (err) {
     status.className = 'text-xs font-bold text-red-600 h-4';
     status.textContent = '✕ Error';
@@ -1389,11 +1670,136 @@ function createTrackThumbnail(track) {
   </div>`;
 }
 
+function updateCompareTracksButton() {
+  const button = document.getElementById('btnCompareTracks');
+  const count = document.getElementById('compareTrackCount');
+  const selectedCount = selectedTrackIds.size;
+  if (count) count.textContent = String(selectedCount);
+  if (button) {
+    button.disabled = selectedCount < 2;
+    button.title = selectedCount < 2 ? 'Selecciona al menos dos tracks' : `Comparar ${selectedCount} tracks`;
+  }
+}
+
+function setTrackSelected(trackId, selected) {
+  const key = String(trackId);
+  if (selected) selectedTrackIds.add(key);
+  else selectedTrackIds.delete(key);
+  document.querySelectorAll(`.track-select-checkbox[data-track-id="${CSS.escape(key)}"]`).forEach(input => {
+    input.checked = selected;
+  });
+  updateCompareTracksButton();
+}
+
+function bindTrackSelection(container, track) {
+  const checkbox = container.querySelector('.track-select-checkbox');
+  checkbox?.addEventListener('click', event => event.stopPropagation());
+  checkbox?.addEventListener('change', event => {
+    event.stopPropagation();
+    setTrackSelected(track.id, event.target.checked);
+  });
+}
+
+function closeTrackComparison() {
+  document.getElementById('trackCompareModal')?.classList.add('hidden');
+  document.body.classList.remove('track-compare-open');
+}
+
+function openTrackComparison() {
+  const tracks = Array.from(selectedTrackIds)
+    .map(id => historyTracksById.get(id))
+    .filter(Boolean);
+  if (tracks.length < 2) {
+    alert('Selecciona al menos dos tracks para compararlos.');
+    return;
+  }
+  if (tracks.length > 10) {
+    alert('Puedes comparar un máximo de 10 tracks a la vez.');
+    return;
+  }
+
+  const modal = document.getElementById('trackCompareModal');
+  const legend = document.getElementById('trackCompareLegend');
+  modal?.classList.remove('hidden');
+  document.body.classList.add('track-compare-open');
+
+  if (!trackCompareMap) {
+    trackCompareMap = L.map('trackCompareMap', { zoomControl: true }).setView([40.4167, -3.7033], 6);
+    const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
+      maxZoom: 19
+    });
+    const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: '&copy; Esri',
+      maxZoom: 19
+    });
+    osm.addTo(trackCompareMap);
+    L.control.layers({ '🗺️ Mapa': osm, '🛰️ Satélite': satellite }, null, { position: 'topright' }).addTo(trackCompareMap);
+  }
+
+  trackCompareLayers.forEach(layer => trackCompareMap.removeLayer(layer));
+  trackCompareLayers = [];
+  const colors = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#4f46e5', '#65a30d', '#ea580c'];
+  const bounds = L.latLngBounds([]);
+
+  tracks.forEach((track, index) => {
+    const points = extractPointsFromGPX(ensureValidGPXContent(track));
+    const latLngs = points.map(point => [point[0], point[1]]);
+    if (latLngs.length < 2) return;
+    const color = colors[index % colors.length];
+    const layer = L.polyline(latLngs, { color, weight: 5, opacity: 0.88 }).addTo(trackCompareMap);
+    layer.bindTooltip(`<b>${escapeHtml(track.nombre)}</b><br>${(track.distancia || 0).toFixed(1)} km · +${track.desnivelPositivo || 0} m`);
+    trackCompareLayers.push(layer);
+    bounds.extend(layer.getBounds());
+  });
+
+  if (legend) {
+    legend.innerHTML = tracks.map((track, index) => `<div>
+      <span style="background:${colors[index % colors.length]}"></span>
+      <strong>${escapeHtml(track.nombre)}</strong>
+      <small>${(track.distancia || 0).toFixed(1)} km · +${track.desnivelPositivo || 0} m</small>
+    </div>`).join('');
+  }
+  setTimeout(() => {
+    trackCompareMap.invalidateSize();
+    if (bounds.isValid()) trackCompareMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 16 });
+  }, 80);
+}
+
+async function shareGPXTrack(track) {
+  const content = ensureValidGPXContent(track);
+  const filename = `${track.nombre || 'track'}.gpx`;
+  if (!content?.includes('<trkpt')) {
+    alert('No se pudo preparar el archivo GPX.');
+    return;
+  }
+
+  const file = new File([content], filename, { type: 'application/gpx+xml' });
+  if (navigator.share && navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ title: track.nombre, text: 'Abrir recorrido GPX', files: [file] });
+      return;
+    } catch (error) {
+      if (error?.name === 'AbortError') return;
+    }
+  }
+
+  downloadGPX(content, filename);
+  alert('Se ha descargado el GPX. En Android, ábrelo o compártelo con Garmin Connect para guardarlo como recorrido.');
+}
+
 function renderHistoryTable(tracks) {
   const tbody = document.getElementById('tablaHistorial');
   const mobileCards = document.getElementById('trackCardsMobile');
   const statsContainer = document.getElementById('historialStats');
   if (!tbody) return;
+
+  historyTracksById.clear();
+  (tracks || []).forEach(track => historyTracksById.set(String(track.id), track));
+  Array.from(selectedTrackIds).forEach(id => {
+    if (!historyTracksById.has(id)) selectedTrackIds.delete(id);
+  });
+  updateCompareTracksButton();
 
   if (!tracks || tracks.length === 0) {
     if (statsContainer) statsContainer.classList.add('hidden');
@@ -1406,7 +1812,7 @@ function renderHistoryTable(tracks) {
         </div>`;
     }
     tbody.innerHTML = `
-      <tr><td colspan="6" class="px-4 py-12 text-center text-gray-400">
+      <tr><td colspan="7" class="px-4 py-12 text-center text-gray-400">
         <svg class="w-12 h-12 mx-auto mb-3 text-gray-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
         </svg>
@@ -1453,6 +1859,9 @@ function renderHistoryTable(tracks) {
     const tr = document.createElement('tr');
     tr.className = 'hover:bg-blue-50/60 cursor-pointer transition-colors group';
     tr.innerHTML = `
+      <td class="px-2 py-2 text-center">
+        <input type="checkbox" class="track-select-checkbox" data-track-id="${escapeHtml(String(t.id))}" aria-label="Seleccionar ${escapeHtml(t.nombre)} para comparar" ${selectedTrackIds.has(String(t.id)) ? 'checked' : ''}>
+      </td>
       <td class="px-3 py-2">${createTrackThumbnail(t)}</td>
       <td class="px-4 py-3 whitespace-nowrap text-gray-400 text-xs">${fechaStr}</td>
       <td class="px-4 py-3 font-semibold text-gray-900 group-hover:text-blue-600 transition-colors">
@@ -1486,6 +1895,7 @@ function renderHistoryTable(tracks) {
               <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
           </button>
+          <button class="btn-share-gpx p-1.5 text-cyan-600 hover:text-cyan-700 hover:bg-cyan-50 rounded transition-colors" title="Enviar a Garmin o compartir GPX" aria-label="Enviar ${escapeHtml(t.nombre)} a Garmin o compartir">↗</button>
           <button class="btn-delete p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors" title="Eliminar">
             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -1495,6 +1905,7 @@ function renderHistoryTable(tracks) {
       </td>`;
 
     tbody.appendChild(tr);
+    bindTrackSelection(tr, t);
     bindTrackActions(tr, t, true);
 
     if (mobileCards) {
@@ -1504,6 +1915,10 @@ function renderHistoryTable(tracks) {
       card.setAttribute('role', 'button');
       card.setAttribute('aria-label', `Analizar ${t.nombre}`);
       card.innerHTML = `
+        <label class="track-mobile-select" aria-label="Seleccionar ${escapeHtml(t.nombre)} para comparar">
+          <input type="checkbox" class="track-select-checkbox" data-track-id="${escapeHtml(String(t.id))}" ${selectedTrackIds.has(String(t.id)) ? 'checked' : ''}>
+          <span>Comparar</span>
+        </label>
         <div class="track-mobile-header">
           ${createTrackThumbnail(t)}
           <div class="min-w-0 flex-1">
@@ -1523,10 +1938,12 @@ function renderHistoryTable(tracks) {
           <button class="btn-edit" type="button">✏️ <span>Editar</span></button>
           <button class="btn-duplicate" type="button">⧉ <span>Variante</span></button>
           <button class="btn-reanalyze" type="button">◉ <span>Analizar</span></button>
+          <button class="btn-share-gpx" type="button">↗ <span>Garmin</span></button>
           <button class="btn-download" type="button">↓ <span>GPX</span></button>
           <button class="btn-delete track-mobile-delete" type="button">🗑 <span>Eliminar</span></button>
         </div>`;
       mobileCards.appendChild(card);
+      bindTrackSelection(card, t);
       bindTrackActions(card, t, true);
     }
   });
@@ -1535,11 +1952,11 @@ function renderHistoryTable(tracks) {
 function bindTrackActions(container, track, openOnContainerClick) {
   if (openOnContainerClick) {
     container.addEventListener('click', event => {
-      if (event.target.closest('button')) return;
+      if (event.target.closest('button, input, label')) return;
       reanalyzeTrack(track);
     });
     container.addEventListener('keydown', event => {
-      if ((event.key === 'Enter' || event.key === ' ') && !event.target.closest('button')) {
+      if ((event.key === 'Enter' || event.key === ' ') && !event.target.closest('button, input, label')) {
         event.preventDefault();
         reanalyzeTrack(track);
       }
@@ -1562,6 +1979,10 @@ function bindTrackActions(container, track, openOnContainerClick) {
     event.stopPropagation();
     const safeGPX = ensureValidGPXContent(track);
     downloadGPX(safeGPX, track.nombre + '.gpx');
+  });
+  container.querySelector('.btn-share-gpx')?.addEventListener('click', event => {
+    event.stopPropagation();
+    shareGPXTrack(track);
   });
   container.querySelector('.btn-delete')?.addEventListener('click', async event => {
     event.stopPropagation();
@@ -1758,6 +2179,8 @@ function setupAnalyzerMenu() {
       duplicateTrackInCreator(track);
     } else if (action === 'download') {
       downloadGPX(ensureValidGPXContent(track), `${track.nombre}.gpx`);
+    } else if (action === 'share') {
+      shareGPXTrack(track);
     }
   });
   document.addEventListener('click', closeAnalyzerMenu);
@@ -1877,6 +2300,12 @@ document.addEventListener('DOMContentLoaded', () => {
   setupAnalyzerMenu();
   consumeSharedGPX();
   document.getElementById('btnTrackLocation')?.addEventListener('click', toggleTrackLocation);
+  document.getElementById('btnCenterCurrentLocation')?.addEventListener('click', centerMapOnCurrentLocation);
+  document.getElementById('btnCompareTracks')?.addEventListener('click', openTrackComparison);
+  document.getElementById('btnCloseTrackCompare')?.addEventListener('click', closeTrackComparison);
+  document.getElementById('trackCompareModal')?.addEventListener('click', event => {
+    if (event.target.id === 'trackCompareModal') closeTrackComparison();
+  });
 
   // Restore the Supabase session before the first cloud sync.
   initializeCloudAuth()
@@ -1900,6 +2329,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (toggleChartFullscreenBtn) toggleChartFullscreenBtn.addEventListener('click', () => toggleChartFullscreen());
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') closeAnalyzerMenu();
+    if (e.key === 'Escape' && !document.getElementById('trackCompareModal')?.classList.contains('hidden')) closeTrackComparison();
     if (e.key === 'Escape' && document.getElementById('profileCard')?.classList.contains('profile-expanded')) {
       toggleChartFullscreen(false);
     }
