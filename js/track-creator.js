@@ -329,7 +329,7 @@ async function addWaypoint(latlng) {
       }
     } catch (err) {
       console.error('Routing error:', err);
-      alert('Error al calcular la ruta: ' + err.message);
+      showCreatorNotice('No se pudo calcular el tramo. Inténtalo de nuevo o usa el modo manual.', 'warning');
       creator.waypoints.pop();
       creator.undoStack.pop();
     } finally {
@@ -420,12 +420,12 @@ function rebuildAllMarkers() {
 // 3. ROUTING (OpenRouteService & Elevation)
 // =============================================
 
-async function enrichElevations(points) {
+async function enrichElevations(points, forceRefresh = false) {
   if (!points || points.length === 0) return points;
 
   // Check if elevation data is missing (points have 0 elevation)
   const needsEle = points.some(p => !p[2] || p[2] === 0);
-  if (!needsEle) return points;
+  if (!needsEle && !forceRefresh) return points;
 
   try {
     const chunkSize = 80;
@@ -464,30 +464,41 @@ async function fetchRoute(from, to) {
   // Use POST request to /v2/directions/{profile}/geojson so ORS returns 3D coordinates [lon, lat, ele]
   const url = `https://api.openrouteservice.org/v2/directions/${creator.profile}/geojson`;
 
-  const response = await fetch(url, {
+  const requestOptions = {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': creator.apiKey
-    },
-    body: JSON.stringify({
-      coordinates: [
-        [from.lng, from.lat],
-        [to.lng, to.lat]
-      ],
-      elevation: true
-    })
-  });
+    headers: { 'Content-Type': 'application/json', 'Authorization': creator.apiKey },
+    body: JSON.stringify({ coordinates: [[from.lng, from.lat], [to.lng, to.lat]], elevation: true })
+  };
+  let response = null;
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      response = await fetch(url, requestOptions);
+      if (response.ok || ![429, 500, 502, 503, 504].includes(response.status)) break;
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 450 * (attempt + 1)));
+  }
+
+  if (!response) {
+    console.warn('Routing service unavailable:', lastError);
+    showCreatorNotice('Servicio de rutas no disponible. Se ha añadido un tramo recto provisional.', 'warning');
+    return enrichElevations(interpolateSegmentPoints(from, to, 0.05), true);
+  }
 
   if (!response.ok) {
     const errData = await response.json().catch(() => ({}));
-    throw new Error(errData.error?.message || `HTTP ${response.status}`);
+    console.warn('Routing service response:', response.status, errData);
+    showCreatorNotice('No se pudo seguir la carretera. Se ha añadido un tramo recto provisional.', 'warning');
+    return enrichElevations(interpolateSegmentPoints(from, to, 0.05), true);
   }
 
   const data = await response.json();
 
   if (!data.features || data.features.length === 0) {
-    throw new Error('No se encontró ruta');
+    showCreatorNotice('No se encontró una vía entre esos puntos. Se ha añadido un tramo recto provisional.', 'warning');
+    return enrichElevations(interpolateSegmentPoints(from, to, 0.05), true);
   }
 
   const coords = data.features[0].geometry.coordinates;
@@ -495,7 +506,7 @@ async function fetchRoute(from, to) {
   let points = coords.map(c => [c[1], c[0], c[2] !== undefined ? Math.round(c[2]) : 0]);
 
   // Fallback to Open-Meteo elevation if all or some elevation values are 0
-  points = await enrichElevations(points);
+  points = await enrichElevations(points, true);
 
   return points;
 }
@@ -614,17 +625,45 @@ function cleanElevations(rawPoints) {
     }
   }
 
-  // Step 2: 3-point moving median filter to eliminate single-point spikes or dips
-  if (points.length >= 3) {
-    const smoothed = points.map(p => [...p]);
-    for (let i = 1; i < points.length - 1; i++) {
-      const window = [points[i - 1][2], points[i][2], points[i + 1][2]].sort((a, b) => a - b);
-      smoothed[i][2] = window[1];
-    }
-    return smoothed;
+  if (points.length < 3) return points;
+
+  // Step 2: Hampel-style local median removes isolated DEM spikes without flattening real climbs.
+  const filtered = points.map(point => [...point]);
+  const radius = 3;
+  for (let i = 1; i < points.length - 1; i++) {
+    const values = points.slice(Math.max(0, i - radius), Math.min(points.length, i + radius + 1))
+      .map(point => point[2]).sort((a, b) => a - b);
+    const median = values[Math.floor(values.length / 2)];
+    const deviations = values.map(value => Math.abs(value - median)).sort((a, b) => a - b);
+    const mad = deviations[Math.floor(deviations.length / 2)];
+    if (Math.abs(points[i][2] - median) > Math.max(18, mad * 3.5)) filtered[i][2] = median;
   }
 
-  return points;
+  // Step 3: cap physically implausible point-to-point jumps (45% slope plus DEM tolerance).
+  for (let i = 1; i < filtered.length; i++) {
+    const distanceMeters = haversineDistanceCreator(filtered[i - 1][0], filtered[i - 1][1], filtered[i][0], filtered[i][1]) * 1000;
+    const maxChange = Math.max(10, distanceMeters * 0.45 + 5);
+    filtered[i][2] = Math.max(filtered[i - 1][2] - maxChange, Math.min(filtered[i - 1][2] + maxChange, filtered[i][2]));
+  }
+  for (let i = filtered.length - 2; i >= 0; i--) {
+    const distanceMeters = haversineDistanceCreator(filtered[i][0], filtered[i][1], filtered[i + 1][0], filtered[i + 1][1]) * 1000;
+    const maxChange = Math.max(10, distanceMeters * 0.45 + 5);
+    filtered[i][2] = Math.max(filtered[i + 1][2] - maxChange, Math.min(filtered[i + 1][2] + maxChange, filtered[i][2]));
+  }
+
+  // Step 4: light weighted smoothing keeps the live profile visually continuous.
+  return filtered.map((point, index) => {
+    if (index === 0 || index === filtered.length - 1) return [point[0], point[1], Math.round(point[2])];
+    let weighted = 0;
+    let weightTotal = 0;
+    for (let offset = -2; offset <= 2; offset++) {
+      const sample = filtered[Math.max(0, Math.min(filtered.length - 1, index + offset))];
+      const weight = 3 - Math.abs(offset);
+      weighted += sample[2] * weight;
+      weightTotal += weight;
+    }
+    return [point[0], point[1], Math.round(weighted / weightTotal)];
+  });
 }
 
 let kilometerMarkers = [];
@@ -1375,4 +1414,15 @@ function showRoutingSpinner(show) {
   if (spinner) {
     spinner.classList.toggle('hidden', !show);
   }
+}
+
+function showCreatorNotice(message, type = 'info') {
+  const status = document.getElementById('creatorSaveStatus');
+  if (!status) return;
+  status.className = `creator-map-notice ${type === 'warning' ? 'is-warning' : ''}`;
+  status.textContent = message;
+  clearTimeout(showCreatorNotice.timer);
+  showCreatorNotice.timer = setTimeout(() => {
+    if (status.textContent === message) status.textContent = '';
+  }, 5500);
 }

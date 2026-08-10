@@ -41,17 +41,13 @@ html {
   border-radius: 0.7rem;
 }
 
-#vistaCrear .analyzer-location-control {
-  top: 18px;
-  bottom: auto;
-}
-
 .analyzer-location-btn {
   width: 38px;
   height: 38px;
   padding: 0;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   color: #2563eb;
   font-size: 11px;
   font-weight: 800;
@@ -212,7 +208,67 @@ html {
 }
 
 .creator-import-btn svg { width: 15px; height: 15px; }
-.creator-help-button { font-size: 17px; font-weight: 900; color: #7c3aed; }
+.creator-toolbar-help {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border: 1px solid #ddd6fe;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #7c3aed;
+  background: #f5f3ff;
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.context-help {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border: 1px solid #cbd5e1;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  background: #fff;
+  font-size: 10px;
+  font-weight: 900;
+  cursor: help;
+}
+
+.context-help::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 2200;
+  width: max-content;
+  max-width: min(270px, 75vw);
+  padding: 0.45rem 0.6rem;
+  border-radius: 0.55rem;
+  color: #fff;
+  background: #0f172a;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.24);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-transform: none;
+  letter-spacing: normal;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 4px);
+  transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+.context-help:hover::after,
+.context-help:focus::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
 
 .creator-help-modal {
   position: fixed;
@@ -240,6 +296,41 @@ html {
 .creator-help-panel ul { margin: 0.8rem 0 0; padding-left: 1.1rem; color: #475569; font-size: 0.78rem; line-height: 1.65; }
 .creator-help-panel li { list-style: disc; }
 .creator-help-close { position: absolute; top: 0.8rem; right: 0.8rem; color: #64748b; font-weight: 800; }
+
+.rename-track-panel label { display: block; margin-top: 0.8rem; color: #64748b; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+.rename-track-panel input { width: 100%; margin-top: 0.3rem; padding: 0.65rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 0.65rem; color: #0f172a; font-size: 14px; font-weight: 700; outline: none; }
+.rename-track-panel input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.18); }
+.rename-track-actions { margin-top: 1rem; display: flex; justify-content: flex-end; gap: 0.5rem; }
+.rename-track-actions button { padding: 0.5rem 0.75rem; border-radius: 0.55rem; color: #475569; background: #f1f5f9; font-size: 11px; font-weight: 850; }
+#btnConfirmRename { color: #fff; background: #2563eb; }
+
+#creatorSaveStatus {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  z-index: 1000;
+  max-width: min(440px, calc(100% - 150px));
+  transform: translateX(-50%);
+}
+
+.creator-map-notice {
+  padding: 0.5rem 0.7rem;
+  border: 1px solid #bfdbfe;
+  border-radius: 0.65rem;
+  color: #1d4ed8;
+  background: rgba(239, 246, 255, 0.96);
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.16);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.creator-map-notice.is-warning {
+  border-color: #fde68a;
+  color: #92400e;
+  background: rgba(255, 251, 235, 0.97);
+}
 
 .profile-tool-btn:active {
   transform: scale(0.95);

@@ -583,7 +583,12 @@ function renderSurfaceSummary(summary, message = '', target = 'surface') {
   const legend = document.getElementById(`${prefix}Legend`);
   if (!section || !status || !bar || !legend) return;
   section.classList.remove('hidden');
-  status.textContent = message;
+  status.className = 'context-help';
+  status.textContent = '?';
+  status.tabIndex = 0;
+  status.setAttribute('role', 'img');
+  status.setAttribute('aria-label', message || 'Información sobre la estimación');
+  status.dataset.tooltip = message || 'Información sobre la estimación';
 
   if (!summary) {
     bar.innerHTML = '<span class="surface-loading"></span>';
@@ -2102,12 +2107,88 @@ function openTrackPointInGoogleMaps(which) {
   closeAnalyzerMenu();
 }
 
+function renameGPXContent(content, newName) {
+  const xml = new DOMParser().parseFromString(content, 'application/xml');
+  if (xml.querySelector('parsererror')) return content;
+  Array.from(xml.getElementsByTagNameNS('*', 'name')).slice(0, 2).forEach(element => {
+    element.textContent = newName;
+  });
+  return new XMLSerializer().serializeToString(xml);
+}
+
+async function renameAnalyzedTrack(track) {
+  const currentName = parsedData?.nombre || track?.nombre || 'Ruta';
+  const newName = (await requestTrackName(currentName))?.trim();
+  if (!newName || newName === currentName) return;
+
+  const renamedContent = renameGPXContent(ensureValidGPXContent(track), newName);
+  const updatedTrack = {
+    ...track,
+    nombre: newName,
+    gpxContent: renamedContent,
+    distancia: parsedData.distancia,
+    desnivelPositivo: parsedData.desnivelPositivo,
+    desnivelNegativo: parsedData.desnivelNegativo,
+    altitudMax: parsedData.altitudMax,
+    altitudMin: parsedData.altitudMin,
+    surfaceSummary: parsedData.surfaceSummary || track.surfaceSummary || null
+  };
+
+  if (track.id !== undefined && track.id !== null) {
+    const result = await saveTrackToDB(updatedTrack);
+    if (result.cancelled) return;
+    await loadHistory();
+  }
+
+  parsedData.nombre = newName;
+  fileContent = renamedContent;
+  fileName = `${newName}.gpx`;
+  currentAnalyzedTrack = updatedTrack;
+  document.getElementById('trackName').textContent = newName;
+  const status = document.getElementById('saveStatus');
+  if (status) {
+    status.className = 'text-xs font-bold text-emerald-600 h-4';
+    status.textContent = track.id !== undefined && track.id !== null ? '✓ Nombre actualizado' : '✓ Nombre cambiado';
+    setTimeout(() => { if (status.textContent.includes('Nombre')) status.textContent = ''; }, 2500);
+  }
+}
+
+function requestTrackName(currentName) {
+  const modal = document.getElementById('renameTrackModal');
+  const input = document.getElementById('renameTrackInput');
+  const confirmButton = document.getElementById('btnConfirmRename');
+  const cancelButton = document.getElementById('btnCancelRename');
+  if (!modal || !input || !confirmButton || !cancelButton) return Promise.resolve(null);
+
+  modal.classList.remove('hidden');
+  input.value = currentName;
+  setTimeout(() => { input.focus(); input.select(); }, 20);
+
+  return new Promise(resolve => {
+    const finish = value => {
+      modal.classList.add('hidden');
+      confirmButton.onclick = null;
+      cancelButton.onclick = null;
+      modal.onclick = null;
+      input.onkeydown = null;
+      resolve(value);
+    };
+    confirmButton.onclick = () => finish(input.value);
+    cancelButton.onclick = () => finish(null);
+    modal.onclick = event => { if (event.target === modal) finish(null); };
+    input.onkeydown = event => {
+      if (event.key === 'Enter') finish(input.value);
+      if (event.key === 'Escape') finish(null);
+    };
+  });
+}
+
 function setupAnalyzerMenu() {
   document.getElementById('btnAnalyzerMenu')?.addEventListener('click', event => {
     event.stopPropagation();
     toggleAnalyzerMenu();
   });
-  document.getElementById('analyzerMenu')?.addEventListener('click', event => {
+  document.getElementById('analyzerMenu')?.addEventListener('click', async event => {
     event.stopPropagation();
     const button = event.target.closest('button[data-analyzer-action]');
     if (!button || button.disabled) return;
@@ -2131,6 +2212,8 @@ function setupAnalyzerMenu() {
 
     if (action === 'edit' && typeof editTrackInCreator === 'function') {
       editTrackInCreator(track);
+    } else if (action === 'rename') {
+      await renameAnalyzedTrack(track);
     } else if (action === 'duplicate' && typeof duplicateTrackInCreator === 'function') {
       duplicateTrackInCreator(track);
     } else if (action === 'download') {

@@ -34,7 +34,7 @@
   <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 
   <!-- Custom CSS -->
-  <link rel="stylesheet" href="css/style.css?v=24">
+  <link rel="stylesheet" href="css/style.css?v=25">
 </head>
 
 <body class="bg-gray-100 text-gray-800 min-h-screen flex flex-col">
@@ -119,6 +119,7 @@
               <div id="analyzerMenu" class="analyzer-menu hidden" role="menu">
                 <button id="btnOpenRouteReplay" type="button" disabled role="menuitem" data-analyzer-action="replay"><span>▶</span> Recorrido 3D</button>
                 <button id="btnAnalyzeEdit" type="button" role="menuitem" data-analyzer-action="edit"><span>✏️</span> Editar ruta</button>
+                <button id="btnAnalyzeRename" type="button" role="menuitem" data-analyzer-action="rename"><span>✎</span> Cambiar nombre</button>
                 <button id="btnAnalyzeDuplicate" type="button" role="menuitem" data-analyzer-action="duplicate"><span>⧉</span> Duplicar ruta</button>
                 <div class="analyzer-menu-separator"></div>
                 <button id="btnNavigateStart" type="button" role="menuitem" data-analyzer-action="start"><span>🟢</span> Navegar al inicio</button>
@@ -168,9 +169,9 @@
         </div>
         <div id="profileCard" class="glass-card p-2 rounded-xl shadow-sm card-hover profile-card">
           <div class="profile-toolbar">
-            <div>
+            <div class="flex items-center gap-1.5">
               <p class="text-xs font-extrabold text-gray-700 uppercase tracking-wide">Perfil altimétrico</p>
-              <p class="text-[10px] text-gray-400">Desliza o pellizca para ampliar · pasa por el perfil para localizarte</p>
+              <span class="context-help" tabindex="0" role="img" aria-label="Desliza o pellizca para ampliar; pasa por el perfil para localizarte en el mapa" data-tooltip="Desliza o pellizca para ampliar · pasa por el perfil para localizarte">?</span>
             </div>
             <div class="flex items-center gap-1.5">
               <label class="profile-interval-control" title="Distancia de cada tramo del perfil">
@@ -220,8 +221,10 @@
       <section id="surfaceSection" class="hidden glass-card p-3 md:p-4 rounded-xl shadow-sm fade-in">
         <div class="flex flex-wrap items-start justify-between gap-2 mb-3">
           <div>
-            <h3 class="text-sm font-black text-gray-900 uppercase tracking-wider">🛣️ Superficie estimada</h3>
-            <p class="text-[11px] text-gray-500 mt-0.5">Calculada con los datos de vías y superficies de OpenStreetMap.</p>
+            <div class="flex items-center gap-1.5">
+              <h3 class="text-sm font-black text-gray-900 uppercase tracking-wider">🛣️ Superficie estimada</h3>
+              <span class="context-help" tabindex="0" role="img" aria-label="Calculada con los datos de vías y superficies de OpenStreetMap" data-tooltip="Calculada con los datos de vías y superficies de OpenStreetMap">?</span>
+            </div>
           </div>
           <div id="surfaceStatus" class="text-xs font-bold text-gray-500"></div>
         </div>
@@ -233,8 +236,10 @@
       <section id="climbsSection" class="hidden glass-card p-3 md:p-4 rounded-xl shadow-sm fade-in">
         <div class="flex flex-wrap items-start justify-between gap-2 mb-3">
           <div>
-            <h3 class="text-sm font-black text-gray-900 uppercase tracking-wider">⛰️ Subidas</h3>
-            <p class="text-[11px] text-gray-500 mt-0.5">Detectadas automáticamente a partir del perfil de altitud.</p>
+            <div class="flex items-center gap-1.5">
+              <h3 class="text-sm font-black text-gray-900 uppercase tracking-wider">⛰️ Subidas</h3>
+              <span class="context-help" tabindex="0" role="img" aria-label="Detectadas automáticamente a partir del perfil de altitud" data-tooltip="Detectadas automáticamente a partir del perfil de altitud">?</span>
+            </div>
           </div>
           <div id="climbsSummary" class="text-xs font-bold text-gray-500"></div>
         </div>
@@ -278,8 +283,10 @@
       <details id="sharedReplaysPanel" class="hidden glass-card rounded-xl shadow-sm shared-replays-panel">
         <summary class="shared-replays-summary">
           <div>
-            <h2 class="text-sm font-extrabold text-gray-900">🔗 Enlaces de recorridos 3D</h2>
-            <p class="text-[11px] text-gray-500 mt-0.5">Pulsa para ver, compartir o desactivar enlaces.</p>
+            <div class="flex items-center gap-1.5">
+              <h2 class="text-sm font-extrabold text-gray-900">🔗 Enlaces de recorridos 3D</h2>
+              <span class="context-help" tabindex="0" role="img" aria-label="Pulsa para ver, compartir o desactivar enlaces" data-tooltip="Pulsa para ver, compartir o desactivar enlaces">?</span>
+            </div>
           </div>
           <span class="shared-replays-chevron" aria-hidden="true">⌄</span>
         </summary>
@@ -412,6 +419,7 @@
               <option value="foot-walking">🚶 Caminar / Paseo</option>
             </select>
           </div>
+          <button id="btnCreatorHelp" type="button" class="creator-toolbar-help" title="Ayuda para crear rutas" aria-label="Ayuda para crear rutas">?</button>
         </div>
       </div>
 
@@ -426,7 +434,6 @@
           <button id="btnFitCreatorRoute" type="button" class="analyzer-location-btn" title="Ver todo el recorrido" aria-label="Ver todo el recorrido">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
           </button>
-          <button id="btnCreatorHelp" type="button" class="analyzer-location-btn creator-help-button" title="Ayuda para crear rutas" aria-label="Ayuda para crear rutas">?</button>
         </div>
 
         <!-- Routing Spinner -->
@@ -531,6 +538,18 @@
     </div>
   </section>
 
+  <section id="renameTrackModal" class="creator-help-modal hidden" role="dialog" aria-modal="true" aria-labelledby="renameTrackTitle">
+    <div class="creator-help-panel rename-track-panel">
+      <h2 id="renameTrackTitle">Cambiar nombre</h2>
+      <label for="renameTrackInput">Nombre del track</label>
+      <input id="renameTrackInput" type="text" maxlength="120" autocomplete="off">
+      <div class="rename-track-actions">
+        <button id="btnCancelRename" type="button">Cancelar</button>
+        <button id="btnConfirmRename" type="button">Guardar nombre</button>
+      </div>
+    </div>
+  </section>
+
   <section id="trackCompareModal" class="track-compare-modal hidden" role="dialog" aria-modal="true" aria-labelledby="trackCompareTitle">
     <div class="track-compare-panel">
       <header class="track-compare-header">
@@ -596,8 +615,8 @@
 
   <!-- App Logic (Cache-busted) -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="js/app.js?v=24"></script>
-  <script src="js/route-replay.js?v=24"></script>
-  <script src="js/track-creator.js?v=24"></script>
+  <script src="js/app.js?v=25"></script>
+  <script src="js/route-replay.js?v=25"></script>
+  <script src="js/track-creator.js?v=25"></script>
 </body>
 </html>
