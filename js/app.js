@@ -41,6 +41,22 @@ const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_G9meSMRexP5YKaam18BbPA_E9eyOxNr
 const supabaseClient = window.supabase?.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY) || null;
 let cloudSession = null;
 
+function setCloudSyncState(state = 'idle', label = '') {
+  const indicator = document.getElementById('cloudSyncStatus');
+  if (!indicator) return;
+  indicator.className = `cloud-sync-indicator is-${state}`;
+  const descriptions = {
+    idle: 'Sincronización disponible',
+    syncing: 'Sincronizando rutas',
+    synced: 'Rutas sincronizadas',
+    local: 'Modo local',
+    error: 'Error de sincronización'
+  };
+  const description = label || descriptions[state] || descriptions.idle;
+  indicator.title = description;
+  indicator.setAttribute('aria-label', description);
+}
+
 function updateCloudAccountUI() {
   const signedOutPanel = document.getElementById('cloudSignedOut');
   const signedInPanel = document.getElementById('cloudSignedIn');
@@ -52,6 +68,7 @@ function updateCloudAccountUI() {
   signedInPanel?.classList.toggle('hidden', !isSignedIn);
   if (accountEmail) accountEmail.textContent = cloudSession?.user?.email || '';
   if (forceSyncBtn) forceSyncBtn.disabled = !isSignedIn;
+  setCloudSyncState(isSignedIn ? 'idle' : 'local');
   document.getElementById('sharedReplaysPanel')?.classList.toggle('hidden', !isSignedIn);
   if (isSignedIn && typeof loadSharedReplayList === 'function') loadSharedReplayList();
 }
@@ -264,14 +281,9 @@ async function syncTracksToCloud(tracksArray) {
 }
 
 async function forceSyncAllToCloud() {
-  const syncStatus = document.getElementById('cloudSyncStatus');
   const btn = document.getElementById('btnForceSync');
   if (btn) btn.disabled = true;
-
-  if (syncStatus) {
-    syncStatus.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200 animate-pulse';
-    syncStatus.innerHTML = `<span>⏳ Subiendo rutas a la nube...</span>`;
-  }
+  setCloudSyncState('syncing');
 
   try {
     if (!cloudSession?.user) {
@@ -289,18 +301,13 @@ async function forceSyncAllToCloud() {
       const freshLocal = await getLocalTracks();
       renderHistoryTable(freshLocal);
 
-      if (syncStatus) {
-        syncStatus.className = 'inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200';
-        syncStatus.innerHTML = `<span>✓ ${freshLocal.length} rutas subidas</span>`;
-      }
+      setCloudSyncState('synced', `${freshLocal.length} rutas sincronizadas`);
     } else {
-      if (syncStatus) {
-        syncStatus.className = 'inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-red-50 text-red-700 border border-red-200';
-        syncStatus.innerHTML = `<span>✕ Error al subir</span>`;
-      }
+      setCloudSyncState('error');
       alert('Detalle del error al subir a la nube: ' + (result.message || 'Error de red'));
     }
   } catch (err) {
+    setCloudSyncState('error');
     alert('Error al forzar la subida: ' + err.message);
   } finally {
     if (btn) btn.disabled = false;
@@ -568,11 +575,12 @@ function getSurfaceCacheKey(points) {
   return `surface:${first.lat.toFixed(4)},${first.lon.toFixed(4)}:${last.lat.toFixed(4)},${last.lon.toFixed(4)}:${(last.distance || 0).toFixed(1)}`;
 }
 
-function renderSurfaceSummary(summary, message = '') {
-  const section = document.getElementById('surfaceSection');
-  const status = document.getElementById('surfaceStatus');
-  const bar = document.getElementById('surfaceBar');
-  const legend = document.getElementById('surfaceLegend');
+function renderSurfaceSummary(summary, message = '', target = 'surface') {
+  const prefix = target === 'creator' ? 'creatorSurface' : 'surface';
+  const section = document.getElementById(`${prefix}Section`);
+  const status = document.getElementById(`${prefix}Status`);
+  const bar = document.getElementById(`${prefix}Bar`);
+  const legend = document.getElementById(`${prefix}Legend`);
   if (!section || !status || !bar || !legend) return;
   section.classList.remove('hidden');
   status.textContent = message;
@@ -626,6 +634,38 @@ async function fetchOSMWaysForSurface(samples) {
   throw lastError || new Error('OpenStreetMap no respondió');
 }
 
+async function getRouteSurfaceSummary(points) {
+  const cacheKey = getSurfaceCacheKey(points);
+  try {
+    const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+    if (cached?.summary && Date.now() - cached.savedAt < 7 * 24 * 60 * 60 * 1000) return cached.summary;
+  } catch (_) {}
+
+  const samples = samplePointsForSurface(points);
+  const ways = await fetchOSMWaysForSurface(samples);
+  const distances = { asphalt: 0, track: 0, trail: 0, unknown: 0 };
+  for (let index = 0; index < samples.length - 1; index++) {
+    const point = samples[index];
+    const segmentKm = Math.max(0, samples[index + 1].distance - point.distance);
+    let nearestDistance = Infinity;
+    let nearestType = 'unknown';
+    for (const way of ways) {
+      for (let geoIndex = 1; geoIndex < way.geometry.length; geoIndex++) {
+        const distance = pointToSegmentMeters(point, way.geometry[geoIndex - 1], way.geometry[geoIndex]);
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestType = classifyOSMWay(way.tags);
+        }
+      }
+    }
+    distances[nearestDistance <= 55 ? nearestType : 'unknown'] += segmentKm;
+  }
+  const total = Object.values(distances).reduce((sum, value) => sum + value, 0) || 1;
+  const summary = Object.fromEntries(Object.entries(distances).map(([key, km]) => [key, { km, percentage: km / total * 100 }]));
+  try { localStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), summary })); } catch (_) {}
+  return summary;
+}
+
 async function analyzeRouteSurface(points, savedSummary = null) {
   const requestId = ++surfaceAnalysisRequestId;
   if (savedSummary) {
@@ -634,50 +674,12 @@ async function analyzeRouteSurface(points, savedSummary = null) {
     return;
   }
 
-  const cacheKey = getSurfaceCacheKey(points);
-  try {
-    const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
-    if (cached?.summary && Date.now() - cached.savedAt < 7 * 24 * 60 * 60 * 1000) {
-      parsedData.surfaceSummary = cached.summary;
-      renderSurfaceSummary(cached.summary, 'Estimación OSM en caché');
-      return;
-    }
-  } catch (_) {}
-
   renderSurfaceSummary(null, 'Consultando OpenStreetMap…');
   try {
-    const samples = samplePointsForSurface(points);
-    const ways = await fetchOSMWaysForSurface(samples);
+    const summary = await getRouteSurfaceSummary(points);
     if (requestId !== surfaceAnalysisRequestId) return;
-
-    const distances = { asphalt: 0, track: 0, trail: 0, unknown: 0 };
-    for (let index = 0; index < samples.length - 1; index++) {
-      const point = samples[index];
-      const segmentKm = Math.max(0, samples[index + 1].distance - point.distance);
-      let nearestDistance = Infinity;
-      let nearestType = 'unknown';
-
-      for (const way of ways) {
-        const geometry = way.geometry;
-        for (let geoIndex = 1; geoIndex < geometry.length; geoIndex++) {
-          const distance = pointToSegmentMeters(point, geometry[geoIndex - 1], geometry[geoIndex]);
-          if (distance < nearestDistance) {
-            nearestDistance = distance;
-            nearestType = classifyOSMWay(way.tags);
-          }
-        }
-      }
-      distances[nearestDistance <= 55 ? nearestType : 'unknown'] += segmentKm;
-    }
-
-    const total = Object.values(distances).reduce((sum, value) => sum + value, 0) || 1;
-    const summary = Object.fromEntries(Object.entries(distances).map(([key, km]) => [key, {
-      km,
-      percentage: km / total * 100
-    }]));
     parsedData.surfaceSummary = summary;
     if (currentAnalyzedTrack) currentAnalyzedTrack.surfaceSummary = summary;
-    try { localStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), summary })); } catch (_) {}
     renderSurfaceSummary(summary, 'Estimación OSM');
   } catch (error) {
     if (requestId !== surfaceAnalysisRequestId) return;
@@ -1481,6 +1483,7 @@ function processAndDisplay(gpxText, name, sourceTrack = null) {
     currentAnalyzedTrack = sourceTrack;
     if (name) fileName = name;
     if (typeof resetRouteReplayShare === 'function') resetRouteReplayShare();
+    switchToTab('analizar');
 
     // Update stats UI
     document.getElementById('trackName').textContent = parsedData.nombre;
@@ -1766,28 +1769,6 @@ function openTrackComparison() {
   }, 80);
 }
 
-async function shareGPXTrack(track) {
-  const content = ensureValidGPXContent(track);
-  const filename = `${track.nombre || 'track'}.gpx`;
-  if (!content?.includes('<trkpt')) {
-    alert('No se pudo preparar el archivo GPX.');
-    return;
-  }
-
-  const file = new File([content], filename, { type: 'application/gpx+xml' });
-  if (navigator.share && navigator.canShare?.({ files: [file] })) {
-    try {
-      await navigator.share({ title: track.nombre, text: 'Abrir recorrido GPX', files: [file] });
-      return;
-    } catch (error) {
-      if (error?.name === 'AbortError') return;
-    }
-  }
-
-  downloadGPX(content, filename);
-  alert('Se ha descargado el GPX. En Android, ábrelo o compártelo con Garmin Connect para guardarlo como recorrido.');
-}
-
 function renderHistoryTable(tracks) {
   const tbody = document.getElementById('tablaHistorial');
   const mobileCards = document.getElementById('trackCardsMobile');
@@ -1895,7 +1876,6 @@ function renderHistoryTable(tracks) {
               <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
           </button>
-          <button class="btn-share-gpx p-1.5 text-cyan-600 hover:text-cyan-700 hover:bg-cyan-50 rounded transition-colors" title="Enviar a Garmin o compartir GPX" aria-label="Enviar ${escapeHtml(t.nombre)} a Garmin o compartir">↗</button>
           <button class="btn-delete p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors" title="Eliminar">
             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -1938,7 +1918,6 @@ function renderHistoryTable(tracks) {
           <button class="btn-edit" type="button">✏️ <span>Editar</span></button>
           <button class="btn-duplicate" type="button">⧉ <span>Variante</span></button>
           <button class="btn-reanalyze" type="button">◉ <span>Analizar</span></button>
-          <button class="btn-share-gpx" type="button">↗ <span>Garmin</span></button>
           <button class="btn-download" type="button">↓ <span>GPX</span></button>
           <button class="btn-delete track-mobile-delete" type="button">🗑 <span>Eliminar</span></button>
         </div>`;
@@ -1980,10 +1959,6 @@ function bindTrackActions(container, track, openOnContainerClick) {
     const safeGPX = ensureValidGPXContent(track);
     downloadGPX(safeGPX, track.nombre + '.gpx');
   });
-  container.querySelector('.btn-share-gpx')?.addEventListener('click', event => {
-    event.stopPropagation();
-    shareGPXTrack(track);
-  });
   container.querySelector('.btn-delete')?.addEventListener('click', async event => {
     event.stopPropagation();
     if (confirm(`¿Eliminar "${track.nombre}"?`)) {
@@ -2017,8 +1992,6 @@ function mergeTracks(localList, cloudList) {
 }
 
 async function loadHistory() {
-  const syncStatus = document.getElementById('cloudSyncStatus');
-
   // 1. Instantly render local tracks first (0 delay!)
   let localTracks = [];
   try {
@@ -2029,15 +2002,7 @@ async function loadHistory() {
   }
 
   // 2. Show syncing status badge
-  if (syncStatus) {
-    syncStatus.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200 animate-pulse';
-    syncStatus.innerHTML = `
-      <svg class="animate-spin w-3 h-3 text-amber-600" fill="none" viewBox="0 0 24 24">
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-      </svg>
-      <span>Sincronizando...</span>`;
-  }
+  setCloudSyncState(cloudSession?.user ? 'syncing' : 'local');
 
   // 3. Fetch cloud tracks in background and MERGE
   try {
@@ -2054,21 +2019,12 @@ async function loadHistory() {
 
       renderHistoryTable(mergedTracks);
 
-      if (syncStatus) {
-        syncStatus.className = 'inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200';
-        syncStatus.innerHTML = `<span>☁️ Sincronizado</span>`;
-      }
+      setCloudSyncState('synced');
     } else {
-      if (syncStatus) {
-        syncStatus.className = 'inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-gray-100 text-gray-600 border border-gray-200';
-        syncStatus.innerHTML = `<span>📱 Modo local</span>`;
-      }
+      setCloudSyncState('local');
     }
   } catch (err) {
-    if (syncStatus) {
-      syncStatus.className = 'inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-gray-100 text-gray-600 border border-gray-200';
-      syncStatus.innerHTML = `<span>📱 Modo local</span>`;
-    }
+    setCloudSyncState(cloudSession?.user ? 'error' : 'local');
   }
 }
 
@@ -2179,8 +2135,6 @@ function setupAnalyzerMenu() {
       duplicateTrackInCreator(track);
     } else if (action === 'download') {
       downloadGPX(ensureValidGPXContent(track), `${track.nombre}.gpx`);
-    } else if (action === 'share') {
-      shareGPXTrack(track);
     }
   });
   document.addEventListener('click', closeAnalyzerMenu);
@@ -2229,6 +2183,7 @@ function switchToTab(tab) {
   btnC.className = inactiveClass;
 
   if (tab === 'analizar') {
+    btnA.classList.remove('hidden');
     vistaA.classList.remove('hidden');
     btnA.className = activeClass;
     // Recalculate map/chart sizes after tab switch
@@ -2237,10 +2192,12 @@ function switchToTab(tab) {
       fitAnalyzedRoute();
     }, 150);
   } else if (tab === 'historial') {
+    btnA.classList.toggle('hidden', !parsedData);
     vistaH.classList.remove('hidden');
     btnH.className = activeClass;
     loadHistory();
   } else if (tab === 'crear') {
+    btnA.classList.toggle('hidden', !parsedData);
     vistaC.classList.remove('hidden');
     btnC.className = activeClass;
     // Lazy-init creator map
@@ -2299,8 +2256,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if (typeof initRouteReplayUI === 'function') initRouteReplayUI();
   setupAnalyzerMenu();
   consumeSharedGPX();
-  document.getElementById('btnTrackLocation')?.addEventListener('click', toggleTrackLocation);
   document.getElementById('btnCenterCurrentLocation')?.addEventListener('click', centerMapOnCurrentLocation);
+  document.getElementById('btnFitAnalyzedRoute')?.addEventListener('click', fitAnalyzedRoute);
   document.getElementById('btnCompareTracks')?.addEventListener('click', openTrackComparison);
   document.getElementById('btnCloseTrackCompare')?.addEventListener('click', closeTrackComparison);
   document.getElementById('trackCompareModal')?.addEventListener('click', event => {

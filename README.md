@@ -15,7 +15,6 @@ Analizador de rutas GPX con mapas interactivos y perfiles altimétricos coloread
 - 🖼️ **Miniaturas con silueta y perfil** de los tracks guardados
 - 💾 **Guardado local y en la nube** (IndexedDB + Supabase)
 - 🔄 **Sincronización entre móvil y ordenador** mediante acceso seguro por correo
-- ↗️ **Envío de GPX a Garmin Connect** mediante el menú nativo de Android
 - 📱 **PWA instalable** en Android, iOS y escritorio
 - 📶 **Funciona offline** (Service Worker)
 
@@ -47,11 +46,9 @@ La base de datos se versiona mediante las migraciones incluidas en `supabase/mig
 
 ## Integraciones de rutas
 
-### Garmin
+### Posible integración futura con Garmin
 
-La aplicación permite enviar cualquier GPX desde Android con **Garmin / compartir**. Usa el menú nativo del sistema; con Garmin Connect instalado se puede escoger como destino y guardar el archivo como recorrido. En escritorio descarga el GPX para importarlo en Garmin Connect Web.
-
-Una sincronización automática completa requiere el [Garmin Connect Developer Program](https://developer.garmin.com/gc-developer-program/overview/):
+Una sincronización automática completa requeriría el [Garmin Connect Developer Program](https://developer.garmin.com/gc-developer-program/overview/):
 
 - **Courses API** para publicar recorridos en Garmin Connect y sincronizarlos con dispositivos compatibles.
 - **Activity API** para recibir actividades realizadas, disponibles también como FIT, GPX o TCX.

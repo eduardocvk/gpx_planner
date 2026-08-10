@@ -34,7 +34,7 @@
   <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 
   <!-- Custom CSS -->
-  <link rel="stylesheet" href="css/style.css?v=23">
+  <link rel="stylesheet" href="css/style.css?v=24">
 </head>
 
 <body class="bg-gray-100 text-gray-800 min-h-screen flex flex-col">
@@ -76,14 +76,14 @@
         </h1>
       </div>
       <nav class="flex gap-1 bg-slate-700/50 rounded-lg p-1">
-        <button id="tabAnalizar" class="px-2.5 py-1 text-xs sm:px-4 sm:py-1.5 sm:text-sm font-bold rounded-md bg-blue-600 text-white transition-all duration-200">
-          Analizar
-        </button>
-        <button id="tabHistorial" class="px-2.5 py-1 text-xs sm:px-4 sm:py-1.5 sm:text-sm font-bold rounded-md text-gray-300 hover:text-white hover:bg-slate-600 transition-all duration-200">
+        <button id="tabHistorial" class="px-2.5 py-1 text-xs sm:px-4 sm:py-1.5 sm:text-sm font-bold rounded-md bg-blue-600 text-white transition-all duration-200">
           Mis Tracks
         </button>
         <button id="tabCrear" class="px-2.5 py-1 text-xs sm:px-4 sm:py-1.5 sm:text-sm font-bold rounded-md text-gray-300 hover:text-white hover:bg-slate-600 transition-all duration-200">
           ✏️ Crear
+        </button>
+        <button id="tabAnalizar" class="hidden px-2.5 py-1 text-xs sm:px-4 sm:py-1.5 sm:text-sm font-bold rounded-md text-gray-300 hover:text-white hover:bg-slate-600 transition-all duration-200">
+          Analizar
         </button>
       </nav>
     </div>
@@ -93,27 +93,11 @@
   <main class="flex-1 p-3 md:p-4 max-w-7xl w-full mx-auto">
 
     <!-- ===== ANALYZER VIEW ===== -->
-    <section id="vistaAnalizar" class="space-y-3 md:space-y-4 fade-in">
+    <section id="vistaAnalizar" class="hidden space-y-3 md:space-y-4 fade-in">
 
       <!-- Controls Bar -->
       <div class="glass-card p-3 md:p-4 rounded-xl shadow-sm flex flex-wrap gap-3 md:gap-4 items-end justify-between">
-        <div class="flex flex-wrap gap-3 md:gap-4 items-end">
-          <div class="w-full sm:w-64">
-            <label for="gpxFile" class="block text-xs font-bold text-gray-500 uppercase mb-1 tracking-wider">Cargar archivo GPX</label>
-            <input type="file" id="gpxFile" accept=".gpx" 
-              class="block w-full text-sm text-gray-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-bold file:bg-blue-600 file:text-white hover:file:bg-blue-700 file:cursor-pointer file:transition-colors cursor-pointer">
-          </div>
-          <div>
-            <label for="intervalSize" class="block text-xs font-bold text-gray-500 uppercase mb-1 tracking-wider">Intervalo</label>
-            <select id="intervalSize" class="bg-gray-50 border border-gray-200 rounded-lg py-2 px-3 text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none transition-all">
-              <option value="0.2">200 m</option>
-              <option value="0.5">500 m</option>
-              <option value="1.0" selected>1 km</option>
-              <option value="2.0">2 km</option>
-              <option value="5.0">5 km</option>
-            </select>
-          </div>
-        </div>
+        <p class="text-sm font-extrabold text-gray-800">Análisis del recorrido</p>
         <div class="flex items-end gap-3">
           <div id="saveStatus" class="text-xs font-bold h-4"></div>
           <button id="btnGuardar" disabled 
@@ -140,7 +124,6 @@
                 <button id="btnNavigateStart" type="button" role="menuitem" data-analyzer-action="start"><span>🟢</span> Navegar al inicio</button>
                 <button id="btnNavigateEnd" type="button" role="menuitem" data-analyzer-action="end"><span>🔴</span> Navegar al final</button>
                 <button id="btnAnalyzeDownload" type="button" role="menuitem" data-analyzer-action="download"><span>↓</span> Descargar GPX</button>
-                <button id="btnAnalyzeShareGPX" type="button" role="menuitem" data-analyzer-action="share"><span>↗</span> Enviar a Garmin / compartir</button>
               </div>
             </div>
           </div>
@@ -174,13 +157,11 @@
         <div class="glass-card p-2 rounded-xl shadow-sm card-hover relative">
           <div id="map"></div>
           <div class="analyzer-location-control">
-            <button id="btnCenterCurrentLocation" type="button" class="analyzer-location-btn analyzer-location-center" title="Centrar el mapa en mi ubicación actual" aria-label="Centrar el mapa en mi ubicación actual">
+            <button id="btnCenterCurrentLocation" type="button" class="analyzer-location-btn analyzer-location-center" title="Ir a mi ubicación" aria-label="Ir a mi ubicación">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>
-              <span>Centrar GPS</span>
             </button>
-            <button id="btnTrackLocation" type="button" class="analyzer-location-btn" title="Mostrar mi ubicación en la ruta" aria-label="Mostrar mi ubicación en la ruta">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8"/></svg>
-              <span>Mi ubicación</span>
+            <button id="btnFitAnalyzedRoute" type="button" class="analyzer-location-btn" title="Ver todo el recorrido" aria-label="Ver todo el recorrido">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
             </button>
             <div id="trackLocationStatus" class="hidden analyzer-location-status"></div>
           </div>
@@ -192,6 +173,16 @@
               <p class="text-[10px] text-gray-400">Desliza o pellizca para ampliar · pasa por el perfil para localizarte</p>
             </div>
             <div class="flex items-center gap-1.5">
+              <label class="profile-interval-control" title="Distancia de cada tramo del perfil">
+                <span>Tramos</span>
+                <select id="intervalSize" aria-label="Intervalo de los tramos del perfil">
+                  <option value="0.2">200 m</option>
+                  <option value="0.5">500 m</option>
+                  <option value="1.0" selected>1 km</option>
+                  <option value="2.0">2 km</option>
+                  <option value="5.0">5 km</option>
+                </select>
+              </label>
               <button id="btnResetChartZoom" type="button" class="profile-tool-btn" title="Restablecer zoom" aria-label="Restablecer zoom">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
               </button>
@@ -252,7 +243,7 @@
     </section>
 
     <!-- ===== HISTORY VIEW ===== -->
-    <section id="vistaHistorial" class="hidden space-y-3 md:space-y-4 fade-in">
+    <section id="vistaHistorial" class="space-y-3 md:space-y-4 fade-in">
 
       <div class="glass-card p-3 rounded-xl shadow-sm">
         <div id="cloudSignedOut" class="flex flex-col md:flex-row md:items-center justify-between gap-3">
@@ -276,9 +267,11 @@
             <p class="text-sm font-extrabold text-emerald-700">☁️ Nube conectada</p>
             <p id="cloudAccountEmail" class="text-xs text-gray-500"></p>
           </div>
-          <button id="btnCloudLogout" class="text-xs font-bold text-gray-500 hover:text-red-600 px-2 py-1 rounded transition-colors">
-            Cerrar sesión
-          </button>
+          <div class="flex items-center gap-2">
+            <span id="cloudSyncStatus" class="cloud-sync-indicator is-idle" role="status" aria-label="Estado de sincronización" title="Estado de sincronización"></span>
+            <button id="btnForceSync" disabled class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-lg transition-colors shadow-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed" title="Sincronizar rutas locales y nube">Sincronizar</button>
+            <button id="btnCloudLogout" class="text-xs font-bold text-gray-500 hover:text-red-600 px-2 py-1 rounded transition-colors">Cerrar sesión</button>
+          </div>
         </div>
       </div>
 
@@ -301,13 +294,6 @@
         <div class="flex items-center gap-2">
           <button id="btnCompareTracks" type="button" disabled class="compare-tracks-btn" title="Selecciona al menos dos tracks">
             ◉ Comparar <span id="compareTrackCount">0</span>
-          </button>
-          <div id="cloudSyncStatus"></div>
-          <button id="btnForceSync" disabled class="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-lg transition-colors flex items-center gap-1 shadow-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed" title="Subir todas las rutas locales a la nube">
-            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-            </svg>
-            <span>Subir todo a la nube</span>
           </button>
         </div>
       </div>
@@ -375,7 +361,17 @@
                 </svg>
                 <span>GPX</span>
               </button>
+              <button id="btnAnalyzeCreated" disabled class="px-3 py-1.5 bg-violet-600 hover:bg-violet-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs rounded-lg transition-colors shrink-0 shadow-sm" title="Analizar sin guardar">Analizar</button>
             </div>
+          </div>
+
+          <div class="w-full sm:w-auto">
+            <label for="gpxFile" class="block text-xs font-bold text-gray-500 uppercase mb-1 tracking-wider">Subir un track</label>
+            <label class="creator-import-btn" for="gpxFile" title="Abrir y analizar un archivo GPX">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 16V4m0 0L7 9m5-5 5 5M5 15v4h14v-4"/></svg>
+              Importar GPX
+            </label>
+            <input type="file" id="gpxFile" accept=".gpx" class="sr-only">
           </div>
 
           <!-- Location Search -->
@@ -384,19 +380,13 @@
             <div class="relative flex items-center">
               <input type="text" id="locationSearch" placeholder="Ej: Cercedilla, Navacerrada..." 
                 autocomplete="off"
-                class="w-full bg-gray-50 border border-gray-200 rounded-lg py-1.5 pl-3 pr-14 text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none transition-all">
-              <div id="searchSpinner" class="hidden absolute right-8 top-2">
+                class="w-full bg-gray-50 border border-gray-200 rounded-lg py-1.5 pl-3 pr-9 text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+              <div id="searchSpinner" class="hidden absolute right-2 top-2">
                 <svg class="animate-spin w-4 h-4 text-blue-600" fill="none" viewBox="0 0 24 24">
                   <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                   <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
               </div>
-              <button id="btnGeolocate" class="absolute right-1 top-1/2 -translate-y-1/2 p-1.5 text-gray-400 hover:text-blue-600 transition-colors rounded-md" title="Usar mi ubicación actual (GPS)">
-                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
-                </svg>
-              </button>
             </div>
             <!-- Search Results Dropdown -->
             <div id="searchResults" class="hidden absolute left-0 right-0 top-full mt-1 bg-white rounded-lg shadow-xl border border-gray-100 z-[1050] max-h-60 overflow-y-auto divide-y divide-gray-100 text-xs"></div>
@@ -428,6 +418,16 @@
       <!-- Creator Map (Full Width) -->
       <div class="glass-card p-2 rounded-xl shadow-sm relative card-hover">
         <div id="mapCrear"></div>
+
+        <div class="analyzer-location-control">
+          <button id="btnGeolocate" type="button" class="analyzer-location-btn analyzer-location-center" title="Ir a mi ubicación" aria-label="Ir a mi ubicación">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>
+          </button>
+          <button id="btnFitCreatorRoute" type="button" class="analyzer-location-btn" title="Ver todo el recorrido" aria-label="Ver todo el recorrido">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
+          </button>
+          <button id="btnCreatorHelp" type="button" class="analyzer-location-btn creator-help-button" title="Ayuda para crear rutas" aria-label="Ayuda para crear rutas">?</button>
+        </div>
 
         <!-- Routing Spinner -->
         <div id="routingSpinner" class="hidden absolute top-4 right-4 z-[1000] bg-white/90 backdrop-blur-sm rounded-lg px-3 py-2 shadow-lg flex items-center gap-2">
@@ -494,6 +494,15 @@
         </div>
       </div>
 
+      <section id="creatorSurfaceSection" class="hidden glass-card p-3 rounded-xl shadow-sm fade-in">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <h3 class="text-xs font-black text-gray-800 uppercase tracking-wider">Superficie estimada</h3>
+          <div id="creatorSurfaceStatus" class="text-[10px] font-bold text-gray-500"></div>
+        </div>
+        <div id="creatorSurfaceBar" class="surface-bar" aria-label="Distribución de superficie durante la creación"></div>
+        <div id="creatorSurfaceLegend" class="surface-legend"></div>
+      </section>
+
       <!-- Live Elevation Chart (Below Stats, Full Width) -->
       <div class="glass-card p-2 rounded-xl shadow-sm card-hover relative">
         <div id="chartCrear"></div>
@@ -505,17 +514,22 @@
         </div>
       </div>
 
-      <!-- Help Tip -->
-      <div class="glass-card p-2.5 rounded-xl shadow-sm">
-        <div class="flex items-center gap-2 text-gray-500 text-xs">
-          <svg class="w-4 h-4 flex-shrink-0 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-          </svg>
-          <p><strong>Haz clic en el mapa</strong> para añadir puntos. Arrastra los puntos azules o los puntos fantasma para modificar la ruta; usa <strong>Eliminar punto</strong> para quitar uno concreto e <strong>Invertir</strong> para cambiar el sentido.</p>
-        </div>
-      </div>
     </section>
   </main>
+
+  <section id="creatorHelpModal" class="creator-help-modal hidden" role="dialog" aria-modal="true" aria-labelledby="creatorHelpTitle">
+    <div class="creator-help-panel">
+      <button id="btnCloseCreatorHelp" type="button" class="creator-help-close" aria-label="Cerrar ayuda">✕</button>
+      <h2 id="creatorHelpTitle">Cómo crear una ruta</h2>
+      <ul>
+        <li>Pulsa en el mapa para añadir puntos.</li>
+        <li>Arrastra los puntos azules para moverlos.</li>
+        <li>Arrastra un punto intermedio para insertarlo entre dos puntos.</li>
+        <li>Usa <strong>Eliminar punto</strong> y pulsa el punto que quieras quitar.</li>
+        <li><strong>Invertir</strong> cambia el sentido; <strong>Deshacer</strong> recupera el paso anterior.</li>
+      </ul>
+    </div>
+  </section>
 
   <section id="trackCompareModal" class="track-compare-modal hidden" role="dialog" aria-modal="true" aria-labelledby="trackCompareTitle">
     <div class="track-compare-panel">
@@ -582,8 +596,8 @@
 
   <!-- App Logic (Cache-busted) -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="js/app.js?v=23"></script>
-  <script src="js/route-replay.js?v=23"></script>
-  <script src="js/track-creator.js?v=23"></script>
+  <script src="js/app.js?v=24"></script>
+  <script src="js/route-replay.js?v=24"></script>
+  <script src="js/track-creator.js?v=24"></script>
 </body>
 </html>

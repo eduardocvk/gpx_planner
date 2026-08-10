@@ -22,9 +22,12 @@ const creator = {
   totalDistance: 0,
   elevationGain: 0,
   editingTrackId: null,           // Preserved track ID when editing an existing track
+  surfaceSummary: null,
   deleteMode: false,              // Click a waypoint marker to remove it
   isRouting: false                // Prevent double-clicks while routing
 };
+let creatorSurfaceTimer = null;
+let creatorSurfaceRequestId = 0;
 
 // =============================================
 // 1. INITIALIZATION
@@ -113,6 +116,7 @@ function setupCreatorEvents() {
   // Location search & Geolocation
   setupLocationSearch();
   document.getElementById('btnGeolocate')?.addEventListener('click', geolocateUser);
+  document.getElementById('btnFitCreatorRoute')?.addEventListener('click', fitCreatorRoute);
 
   // Buttons
   document.getElementById('btnUndo')?.addEventListener('click', undoLastAction);
@@ -122,9 +126,16 @@ function setupCreatorEvents() {
   document.getElementById('btnClearTrack')?.addEventListener('click', clearCreatedTrack);
   document.getElementById('btnSaveCreated')?.addEventListener('click', saveCreatedTrack);
   document.getElementById('btnDownloadCreated')?.addEventListener('click', downloadCreatedTrack);
+  document.getElementById('btnAnalyzeCreated')?.addEventListener('click', analyzeCreatedTrack);
+  document.getElementById('btnCreatorHelp')?.addEventListener('click', openCreatorHelp);
+  document.getElementById('btnCloseCreatorHelp')?.addEventListener('click', closeCreatorHelp);
+  document.getElementById('creatorHelpModal')?.addEventListener('click', event => {
+    if (event.target.id === 'creatorHelpModal') closeCreatorHelp();
+  });
 
   // Keyboard shortcuts
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeCreatorHelp();
     const vistaCrear = document.getElementById('vistaCrear');
     if (vistaCrear && !vistaCrear.classList.contains('hidden')) {
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
@@ -923,6 +934,7 @@ function clearCreatedTrack() {
   creator.waypoints = [];
   creator.routeSegments = [];
   creator.editingTrackId = null;
+  creator.surfaceSummary = null;
   creator.deleteMode = false;
   document.getElementById('btnDeletePoint')?.classList.remove('is-active');
 
@@ -973,6 +985,7 @@ async function saveCreatedTrack() {
       altitudMin: parsed.altitudMin,
       gpxContent: gpxContent
     };
+    if (creator.surfaceSummary) trackData.surfaceSummary = creator.surfaceSummary;
 
     // If editing an existing track, include its ID to update it
     if (creator.editingTrackId) {
@@ -1035,6 +1048,7 @@ function editTrackInCreator(track, options = {}) {
     creator.routeSegments = [];
     creator.undoStack = [];
     creator.editingTrackId = asCopy ? null : track.id;
+    creator.surfaceSummary = track.surfaceSummary || null;
     creator.deleteMode = false;
     document.getElementById('btnDeletePoint')?.classList.remove('is-active');
 
@@ -1107,6 +1121,63 @@ function fitCreatorRoute() {
   });
 }
 
+function openCreatorHelp() {
+  document.getElementById('creatorHelpModal')?.classList.remove('hidden');
+  document.body.classList.add('creator-help-open');
+}
+
+function closeCreatorHelp() {
+  document.getElementById('creatorHelpModal')?.classList.add('hidden');
+  document.body.classList.remove('creator-help-open');
+}
+
+function analyzeCreatedTrack() {
+  if (creator.waypoints.length < 2) return;
+  const name = (document.getElementById('creatorTrackName')?.value || '').trim() || 'Ruta sin guardar';
+  const gpxContent = generateCreatorGPX(name);
+  if (gpxContent && typeof processAndDisplay === 'function') {
+    processAndDisplay(gpxContent, `${name}.gpx`, { nombre: name, gpxContent, surfaceSummary: creator.surfaceSummary });
+  }
+}
+
+function scheduleCreatorSurfaceAnalysis(rawPoints) {
+  clearTimeout(creatorSurfaceTimer);
+  const section = document.getElementById('creatorSurfaceSection');
+  if (!rawPoints || rawPoints.length < 2) {
+    section?.classList.add('hidden');
+    creatorSurfaceRequestId++;
+    return;
+  }
+
+  const snapshot = rawPoints.map(point => [...point]);
+  creatorSurfaceTimer = setTimeout(async () => {
+    const requestId = ++creatorSurfaceRequestId;
+    let distance = 0;
+    const points = snapshot.map((point, index) => {
+      if (index > 0) {
+        const previous = snapshot[index - 1];
+        distance += haversineDistanceCreator(previous[0], previous[1], point[0], point[1]);
+      }
+      return { lat: point[0], lon: point[1], ele: point[2] || 0, distance };
+    });
+    renderSurfaceSummary(null, 'Actualizando…', 'creator');
+    try {
+      const summary = await getRouteSurfaceSummary(points);
+      if (requestId === creatorSurfaceRequestId) {
+        creator.surfaceSummary = summary;
+        renderSurfaceSummary(summary, 'Estimación OSM', 'creator');
+      }
+    } catch (error) {
+      if (requestId !== creatorSurfaceRequestId) return;
+      console.warn('Creator surface analysis error:', error);
+      renderSurfaceSummary({
+        asphalt: { km: 0, percentage: 0 }, track: { km: 0, percentage: 0 },
+        trail: { km: 0, percentage: 0 }, unknown: { km: distance, percentage: 100 }
+      }, 'Sin datos OSM', 'creator');
+    }
+  }, 1400);
+}
+
 
 // =============================================
 // 8. STATS & LIVE CHART
@@ -1149,6 +1220,7 @@ function updateCreatorStats() {
   document.getElementById('btnClearTrack').disabled = !hasPoints;
   document.getElementById('btnSaveCreated').disabled = !hasTrack;
   document.getElementById('btnDownloadCreated').disabled = !hasTrack;
+  document.getElementById('btnAnalyzeCreated').disabled = !hasTrack;
   if (!hasPoints && creator.deleteMode) {
     creator.deleteMode = false;
     document.getElementById('btnDeletePoint')?.classList.remove('is-active');
@@ -1156,6 +1228,7 @@ function updateCreatorStats() {
 
   // Render live elevation chart
   renderCreatorChart(allPoints);
+  scheduleCreatorSurfaceAnalysis(allPoints);
 }
 
 function renderCreatorChart(allPoints) {
