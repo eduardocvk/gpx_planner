@@ -443,8 +443,10 @@ async function enrichElevations(points, forceRefresh = false) {
         const data = await res.json();
         if (data.elevation && data.elevation.length === chunk.length) {
           chunk.forEach((p, idx) => {
-            const ele = (data.elevation[idx] !== null && data.elevation[idx] !== undefined)
-              ? Math.round(data.elevation[idx])
+            const terrainElevation = data.elevation[idx];
+            const shouldReplace = forceRefresh || !p[2] || p[2] <= 10;
+            const ele = shouldReplace && terrainElevation !== null && terrainElevation !== undefined
+              ? Math.round(terrainElevation)
               : (p[2] || 0);
             enriched.push([p[0], p[1], ele]);
           });
@@ -505,8 +507,10 @@ async function fetchRoute(from, to) {
   // ORS returns [lon, lat, ele] 3D coordinates in GeoJSON format
   let points = coords.map(c => [c[1], c[0], c[2] !== undefined ? Math.round(c[2]) : 0]);
 
-  // Fallback to Open-Meteo elevation if all or some elevation values are 0
-  points = await enrichElevations(points, true);
+  // Keep the elevation produced by the routed geometry. Query terrain elevation
+  // only when the routing service did not provide it (terrain DEMs can create
+  // false ravines under bridges, tunnels and greenways).
+  points = await enrichElevations(points);
 
   return points;
 }
@@ -627,39 +631,63 @@ function cleanElevations(rawPoints) {
 
   if (points.length < 3) return points;
 
-  // Step 2: Hampel-style local median removes isolated DEM spikes without flattening real climbs.
+  const cumulativeDistance = [0];
+  for (let i = 1; i < points.length; i++) {
+    cumulativeDistance.push(cumulativeDistance[i - 1] + haversineDistanceCreator(
+      points[i - 1][0], points[i - 1][1], points[i][0], points[i][1]
+    ));
+  }
+
+  // Step 2: distance-based median. A point-count window was too narrow on
+  // detailed geometries and failed to remove broad DEM ravines below bridges.
   const filtered = points.map(point => [...point]);
-  const radius = 3;
+  const halfWindowKm = creator.profile === 'cycling-road' ? 0.7
+    : creator.profile === 'cycling-mountain' ? 0.3 : 0.25;
+  const deviationThreshold = creator.profile === 'cycling-road' ? 4 : 18;
+  let windowStart = 0;
+  let windowEnd = 0;
   for (let i = 1; i < points.length - 1; i++) {
-    const values = points.slice(Math.max(0, i - radius), Math.min(points.length, i + radius + 1))
-      .map(point => point[2]).sort((a, b) => a - b);
+    while (windowStart < i && cumulativeDistance[i] - cumulativeDistance[windowStart] > halfWindowKm) windowStart++;
+    while (windowEnd < points.length - 1 && cumulativeDistance[windowEnd + 1] - cumulativeDistance[i] <= halfWindowKm) windowEnd++;
+    const values = points.slice(windowStart, windowEnd + 1).map(point => point[2]).sort((a, b) => a - b);
     const median = values[Math.floor(values.length / 2)];
     const deviations = values.map(value => Math.abs(value - median)).sort((a, b) => a - b);
     const mad = deviations[Math.floor(deviations.length / 2)];
-    if (Math.abs(points[i][2] - median) > Math.max(18, mad * 3.5)) filtered[i][2] = median;
+    const outlierLimit = creator.profile === 'cycling-road'
+      ? deviationThreshold
+      : Math.max(deviationThreshold, mad * 3.5);
+    if (Math.abs(points[i][2] - median) > outlierLimit) filtered[i][2] = median;
   }
 
-  // Step 3: cap physically implausible point-to-point jumps (45% slope plus DEM tolerance).
+  // Step 3: cap physically implausible point-to-point gradients. Road routing
+  // gets a stricter limit; MTB and hiking retain legitimately steeper terrain.
+  const maxGrade = creator.profile === 'cycling-road' ? 0.18
+    : creator.profile === 'cycling-mountain' ? 0.32 : 0.45;
   for (let i = 1; i < filtered.length; i++) {
     const distanceMeters = haversineDistanceCreator(filtered[i - 1][0], filtered[i - 1][1], filtered[i][0], filtered[i][1]) * 1000;
-    const maxChange = Math.max(10, distanceMeters * 0.45 + 5);
+    const maxChange = Math.max(3, distanceMeters * maxGrade + 1.5);
     filtered[i][2] = Math.max(filtered[i - 1][2] - maxChange, Math.min(filtered[i - 1][2] + maxChange, filtered[i][2]));
   }
   for (let i = filtered.length - 2; i >= 0; i--) {
     const distanceMeters = haversineDistanceCreator(filtered[i][0], filtered[i][1], filtered[i + 1][0], filtered[i + 1][1]) * 1000;
-    const maxChange = Math.max(10, distanceMeters * 0.45 + 5);
+    const maxChange = Math.max(3, distanceMeters * maxGrade + 1.5);
     filtered[i][2] = Math.max(filtered[i + 1][2] - maxChange, Math.min(filtered[i + 1][2] + maxChange, filtered[i][2]));
   }
 
-  // Step 4: light weighted smoothing keeps the live profile visually continuous.
+  // Step 4: smooth over physical distance instead of a fixed number of points.
+  const smoothRadiusKm = creator.profile === 'cycling-road' ? 0.08 : 0.05;
   return filtered.map((point, index) => {
     if (index === 0 || index === filtered.length - 1) return [point[0], point[1], Math.round(point[2])];
     let weighted = 0;
     let weightTotal = 0;
-    for (let offset = -2; offset <= 2; offset++) {
-      const sample = filtered[Math.max(0, Math.min(filtered.length - 1, index + offset))];
-      const weight = 3 - Math.abs(offset);
-      weighted += sample[2] * weight;
+    for (let sampleIndex = index; sampleIndex >= 0 && cumulativeDistance[index] - cumulativeDistance[sampleIndex] <= smoothRadiusKm; sampleIndex--) {
+      const weight = 1 - (cumulativeDistance[index] - cumulativeDistance[sampleIndex]) / (smoothRadiusKm * 1.25);
+      weighted += filtered[sampleIndex][2] * weight;
+      weightTotal += weight;
+    }
+    for (let sampleIndex = index + 1; sampleIndex < filtered.length && cumulativeDistance[sampleIndex] - cumulativeDistance[index] <= smoothRadiusKm; sampleIndex++) {
+      const weight = 1 - (cumulativeDistance[sampleIndex] - cumulativeDistance[index]) / (smoothRadiusKm * 1.25);
+      weighted += filtered[sampleIndex][2] * weight;
       weightTotal += weight;
     }
     return [point[0], point[1], Math.round(weighted / weightTotal)];
