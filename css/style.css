@@ -851,6 +851,16 @@ body.route-replay-open {
   border: 1px solid rgba(255, 255, 255, 0.3);
 }
 
+.creator-toolbar-card {
+  position: relative;
+  z-index: 1200;
+  overflow: visible;
+}
+
+#searchResults {
+  z-index: 1300;
+}
+
 /* --- Card Hover Effect --- */
 .card-hover {
   transition: transform 0.2s ease, box-shadow 0.2s ease;
