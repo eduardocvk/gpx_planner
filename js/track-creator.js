@@ -662,9 +662,9 @@ function cleanElevations(rawPoints) {
   // detailed geometries and failed to remove broad DEM ravines below bridges.
   const filtered = points.map(point => [...point]);
   const isGreenway = creator.profile === 'cycling-greenway';
-  const halfWindowKm = isGreenway ? 1.5 : creator.profile === 'cycling-road' ? 0.7
+  const halfWindowKm = isGreenway ? 0.8 : creator.profile === 'cycling-road' ? 0.7
     : creator.profile === 'cycling-mountain' ? 0.3 : 0.25;
-  const deviationThreshold = isGreenway ? 2.5 : creator.profile === 'cycling-road' ? 4 : 18;
+  const deviationThreshold = isGreenway ? 4 : creator.profile === 'cycling-road' ? 4 : 18;
   let windowStart = 0;
   let windowEnd = 0;
   for (let i = 1; i < points.length - 1; i++) {
@@ -682,7 +682,7 @@ function cleanElevations(rawPoints) {
 
   // Step 3: cap physically implausible point-to-point gradients. Road routing
   // gets a stricter limit; MTB and hiking retain legitimately steeper terrain.
-  const maxGrade = isGreenway ? 0.025 : creator.profile === 'cycling-road' ? 0.18
+  const maxGrade = isGreenway ? 0.04 : creator.profile === 'cycling-road' ? 0.18
     : creator.profile === 'cycling-mountain' ? 0.32 : 0.45;
   for (let i = 1; i < filtered.length; i++) {
     const distanceMeters = haversineDistanceCreator(filtered[i - 1][0], filtered[i - 1][1], filtered[i][0], filtered[i][1]) * 1000;
@@ -696,7 +696,7 @@ function cleanElevations(rawPoints) {
   }
 
   // Step 4: smooth over physical distance instead of a fixed number of points.
-  const smoothRadiusKm = isGreenway ? 0.28 : creator.profile === 'cycling-road' ? 0.08 : 0.05;
+  const smoothRadiusKm = isGreenway ? 0.14 : creator.profile === 'cycling-road' ? 0.08 : 0.05;
   let smoothed = filtered.map((point, index) => {
     if (index === 0 || index === filtered.length - 1) return [point[0], point[1], Math.round(point[2])];
     let weighted = 0;
@@ -714,22 +714,61 @@ function cleanElevations(rawPoints) {
     return [point[0], point[1], Math.round(weighted / weightTotal)];
   });
 
-  // A greenway follows a former railway and its long profile is normally
-  // monotonic. DEMs often read the ground above tunnels or below viaducts,
-  // creating kilometre-long false valleys that a local spike filter cannot
-  // distinguish from real hills. Isotonic regression keeps the overall route
-  // direction while finding the closest smooth monotonic elevation profile.
+  // Correct each travel direction independently. On an out-and-back track a
+  // single monotonic correction erases the ascent on the return leg. Detect a
+  // return near the starting point and split it at the farthest route point.
   if (isGreenway && smoothed.length > 2) {
-    const edgeCount = Math.max(1, Math.min(12, Math.floor(smoothed.length * 0.08)));
-    const startMean = smoothed.slice(0, edgeCount).reduce((sum, point) => sum + point[2], 0) / edgeCount;
-    const endMean = smoothed.slice(-edgeCount).reduce((sum, point) => sum + point[2], 0) / edgeCount;
-    if (Math.abs(endMean - startMean) >= 3) {
-      const corrected = isotonicElevation(smoothed.map(point => point[2]), endMean > startMean);
-      smoothed = smoothed.map((point, index) => [point[0], point[1], Math.round(corrected[index])]);
+    const totalDistance = cumulativeDistance[cumulativeDistance.length - 1];
+    const closingDistance = haversineDistanceCreator(
+      smoothed[0][0], smoothed[0][1], smoothed[smoothed.length - 1][0], smoothed[smoothed.length - 1][1]
+    );
+    const returnsNearStart = totalDistance >= 2 && closingDistance <= Math.max(0.35, totalDistance * 0.12);
+    if (returnsNearStart) {
+      let turnaroundIndex = 1;
+      let farthestDistance = 0;
+      for (let index = 1; index < smoothed.length - 1; index++) {
+        const distanceFromStart = haversineDistanceCreator(
+          smoothed[0][0], smoothed[0][1], smoothed[index][0], smoothed[index][1]
+        );
+        if (distanceFromStart > farthestDistance) {
+          farthestDistance = distanceFromStart;
+          turnaroundIndex = index;
+        }
+      }
+      if (turnaroundIndex > smoothed.length * 0.15 && turnaroundIndex < smoothed.length * 0.85) {
+        smoothed = correctGreenwayRange(smoothed, 0, turnaroundIndex);
+        smoothed = correctGreenwayRange(smoothed, turnaroundIndex, smoothed.length - 1);
+      } else {
+        smoothed = correctGreenwayRange(smoothed, 0, smoothed.length - 1);
+      }
+    } else {
+      smoothed = correctGreenwayRange(smoothed, 0, smoothed.length - 1);
     }
   }
 
   return smoothed;
+}
+
+function correctGreenwayRange(points, startIndex, endIndex) {
+  const length = endIndex - startIndex + 1;
+  if (length < 3) return points;
+  const range = points.slice(startIndex, endIndex + 1);
+  const edgeCount = Math.max(1, Math.min(10, Math.floor(length * 0.08)));
+  const startMean = range.slice(0, edgeCount).reduce((sum, point) => sum + point[2], 0) / edgeCount;
+  const endMean = range.slice(-edgeCount).reduce((sum, point) => sum + point[2], 0) / edgeCount;
+  if (Math.abs(endMean - startMean) < 3) return points;
+
+  const original = range.map(point => point[2]);
+  const trend = isotonicElevation(original, endMean > startMean);
+  const corrected = range.map((point, offset) => {
+    // Keep up to four metres of local character around the corrected railway
+    // trend. Larger deviations are normally tunnel/viaduct DEM artefacts.
+    const localVariation = Math.max(-4, Math.min(4, original[offset] - trend[offset]));
+    return [point[0], point[1], Math.round(trend[offset] + localVariation)];
+  });
+  const result = points.map(point => [...point]);
+  corrected.forEach((point, offset) => { result[startIndex + offset] = point; });
+  return result;
 }
 
 function isotonicElevation(values, increasing) {
