@@ -23,11 +23,15 @@ const creator = {
   elevationGain: 0,
   editingTrackId: null,           // Preserved track ID when editing an existing track
   surfaceSummary: null,
+  fountainsLayer: null,
+  fountainsVisible: false,
   deleteMode: false,              // Click a waypoint marker to remove it
   isRouting: false                // Prevent double-clicks while routing
 };
 let creatorSurfaceTimer = null;
 let creatorSurfaceRequestId = 0;
+let creatorFountainsTimer = null;
+let creatorFountainsRequestId = 0;
 
 // =============================================
 // 1. INITIALIZATION
@@ -63,10 +67,23 @@ function initCreator() {
 
   osmLayer.addTo(creator.map);
 
+  creator.fountainsLayer = L.layerGroup();
+
   L.control.layers({
     '🗺️ Mapa': osmLayer,
     '🛰️ Satélite': satLayer
-  }, null, { position: 'topright' }).addTo(creator.map);
+  }, {
+    '🚰 Fuentes de agua potable': creator.fountainsLayer
+  }, { position: 'topright' }).addTo(creator.map);
+
+  creator.map.on('overlayadd', event => {
+    if (event.layer !== creator.fountainsLayer) return;
+    creator.fountainsVisible = true;
+    scheduleCreatorFountains(getAllFlatPoints(), true);
+  });
+  creator.map.on('overlayremove', event => {
+    if (event.layer === creator.fountainsLayer) creator.fountainsVisible = false;
+  });
 
   // Init chart
   const chartEl = document.getElementById('chartCrear');
@@ -110,6 +127,8 @@ function setupCreatorEvents() {
   if (profileSelect) {
     profileSelect.addEventListener('change', () => {
       creator.profile = profileSelect.value;
+      rebuildPolyline();
+      updateCreatorStats();
     });
   }
 
@@ -464,7 +483,8 @@ async function enrichElevations(points, forceRefresh = false) {
 
 async function fetchRoute(from, to) {
   // Use POST request to /v2/directions/{profile}/geojson so ORS returns 3D coordinates [lon, lat, ele]
-  const url = `https://api.openrouteservice.org/v2/directions/${creator.profile}/geojson`;
+  const routingProfile = creator.profile === 'cycling-greenway' ? 'cycling-regular' : creator.profile;
+  const url = `https://api.openrouteservice.org/v2/directions/${routingProfile}/geojson`;
 
   const requestOptions = {
     method: 'POST',
@@ -641,9 +661,10 @@ function cleanElevations(rawPoints) {
   // Step 2: distance-based median. A point-count window was too narrow on
   // detailed geometries and failed to remove broad DEM ravines below bridges.
   const filtered = points.map(point => [...point]);
-  const halfWindowKm = creator.profile === 'cycling-road' ? 0.7
+  const isGreenway = creator.profile === 'cycling-greenway';
+  const halfWindowKm = isGreenway ? 1.5 : creator.profile === 'cycling-road' ? 0.7
     : creator.profile === 'cycling-mountain' ? 0.3 : 0.25;
-  const deviationThreshold = creator.profile === 'cycling-road' ? 4 : 18;
+  const deviationThreshold = isGreenway ? 2.5 : creator.profile === 'cycling-road' ? 4 : 18;
   let windowStart = 0;
   let windowEnd = 0;
   for (let i = 1; i < points.length - 1; i++) {
@@ -653,7 +674,7 @@ function cleanElevations(rawPoints) {
     const median = values[Math.floor(values.length / 2)];
     const deviations = values.map(value => Math.abs(value - median)).sort((a, b) => a - b);
     const mad = deviations[Math.floor(deviations.length / 2)];
-    const outlierLimit = creator.profile === 'cycling-road'
+    const outlierLimit = isGreenway || creator.profile === 'cycling-road'
       ? deviationThreshold
       : Math.max(deviationThreshold, mad * 3.5);
     if (Math.abs(points[i][2] - median) > outlierLimit) filtered[i][2] = median;
@@ -661,7 +682,7 @@ function cleanElevations(rawPoints) {
 
   // Step 3: cap physically implausible point-to-point gradients. Road routing
   // gets a stricter limit; MTB and hiking retain legitimately steeper terrain.
-  const maxGrade = creator.profile === 'cycling-road' ? 0.18
+  const maxGrade = isGreenway ? 0.025 : creator.profile === 'cycling-road' ? 0.18
     : creator.profile === 'cycling-mountain' ? 0.32 : 0.45;
   for (let i = 1; i < filtered.length; i++) {
     const distanceMeters = haversineDistanceCreator(filtered[i - 1][0], filtered[i - 1][1], filtered[i][0], filtered[i][1]) * 1000;
@@ -675,8 +696,8 @@ function cleanElevations(rawPoints) {
   }
 
   // Step 4: smooth over physical distance instead of a fixed number of points.
-  const smoothRadiusKm = creator.profile === 'cycling-road' ? 0.08 : 0.05;
-  return filtered.map((point, index) => {
+  const smoothRadiusKm = isGreenway ? 0.28 : creator.profile === 'cycling-road' ? 0.08 : 0.05;
+  let smoothed = filtered.map((point, index) => {
     if (index === 0 || index === filtered.length - 1) return [point[0], point[1], Math.round(point[2])];
     let weighted = 0;
     let weightTotal = 0;
@@ -692,6 +713,50 @@ function cleanElevations(rawPoints) {
     }
     return [point[0], point[1], Math.round(weighted / weightTotal)];
   });
+
+  // A greenway follows a former railway and its long profile is normally
+  // monotonic. DEMs often read the ground above tunnels or below viaducts,
+  // creating kilometre-long false valleys that a local spike filter cannot
+  // distinguish from real hills. Isotonic regression keeps the overall route
+  // direction while finding the closest smooth monotonic elevation profile.
+  if (isGreenway && smoothed.length > 2) {
+    const edgeCount = Math.max(1, Math.min(12, Math.floor(smoothed.length * 0.08)));
+    const startMean = smoothed.slice(0, edgeCount).reduce((sum, point) => sum + point[2], 0) / edgeCount;
+    const endMean = smoothed.slice(-edgeCount).reduce((sum, point) => sum + point[2], 0) / edgeCount;
+    if (Math.abs(endMean - startMean) >= 3) {
+      const corrected = isotonicElevation(smoothed.map(point => point[2]), endMean > startMean);
+      smoothed = smoothed.map((point, index) => [point[0], point[1], Math.round(corrected[index])]);
+    }
+  }
+
+  return smoothed;
+}
+
+function isotonicElevation(values, increasing) {
+  const signedValues = increasing ? values : values.map(value => -value);
+  const blocks = [];
+  signedValues.forEach((value, index) => {
+    blocks.push({ start: index, end: index, sum: value, count: 1 });
+    while (blocks.length > 1) {
+      const right = blocks[blocks.length - 1];
+      const left = blocks[blocks.length - 2];
+      if (left.sum / left.count <= right.sum / right.count) break;
+      blocks.pop();
+      blocks.pop();
+      blocks.push({
+        start: left.start,
+        end: right.end,
+        sum: left.sum + right.sum,
+        count: left.count + right.count
+      });
+    }
+  });
+  const result = new Array(values.length);
+  blocks.forEach(block => {
+    const mean = block.sum / block.count;
+    for (let index = block.start; index <= block.end; index++) result[index] = increasing ? mean : -mean;
+  });
+  return result;
 }
 
 let kilometerMarkers = [];
@@ -1245,6 +1310,123 @@ function scheduleCreatorSurfaceAnalysis(rawPoints) {
   }, 1400);
 }
 
+function sampleCreatorRoute(rawPoints, maxSamples = 24) {
+  if (!rawPoints?.length) return [];
+  if (rawPoints.length <= maxSamples) return rawPoints.map(point => ({ lat: point[0], lon: point[1] }));
+  const cumulative = [0];
+  for (let index = 1; index < rawPoints.length; index++) {
+    cumulative.push(cumulative[index - 1] + haversineDistanceCreator(
+      rawPoints[index - 1][0], rawPoints[index - 1][1], rawPoints[index][0], rawPoints[index][1]
+    ));
+  }
+  const total = cumulative[cumulative.length - 1];
+  const samples = [];
+  let cursor = 0;
+  for (let sampleIndex = 0; sampleIndex < maxSamples; sampleIndex++) {
+    const target = total * sampleIndex / (maxSamples - 1);
+    while (cursor < cumulative.length - 1 && cumulative[cursor] < target) cursor++;
+    const point = rawPoints[cursor];
+    samples.push({ lat: point[0], lon: point[1] });
+  }
+  return samples;
+}
+
+async function fetchCreatorFountains(rawPoints) {
+  const samples = sampleCreatorRoute(rawPoints);
+  if (!samples.length) return [];
+  const first = samples[0];
+  const middle = samples[Math.floor(samples.length / 2)];
+  const last = samples[samples.length - 1];
+  const cacheKey = `fountains:${first.lat.toFixed(3)},${first.lon.toFixed(3)}:${middle.lat.toFixed(3)},${middle.lon.toFixed(3)}:${last.lat.toFixed(3)},${last.lon.toFixed(3)}`;
+  try {
+    const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+    if (cached?.items && Date.now() - cached.savedAt < 7 * 24 * 60 * 60 * 1000) return cached.items;
+  } catch (_) {}
+
+  const nodeQueries = samples.map(point =>
+    `node(around:400,${point.lat.toFixed(6)},${point.lon.toFixed(6)})["amenity"="drinking_water"];`
+  ).join('\n');
+  const query = `[out:json][timeout:25];(${nodeQueries});out tags;`;
+  const endpoints = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter'
+  ];
+  let lastError = null;
+  for (const endpoint of endpoints) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+        body: `data=${encodeURIComponent(query)}`,
+        signal: controller.signal
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const items = (data.elements || [])
+        .filter(item => item.type === 'node' && Number.isFinite(item.lat) && Number.isFinite(item.lon))
+        .map(item => ({ id: item.id, lat: item.lat, lon: item.lon, name: item.tags?.name || '' }));
+      try { localStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), items })); } catch (_) {}
+      return items;
+    } catch (error) {
+      lastError = error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw lastError || new Error('OpenStreetMap no respondió');
+}
+
+function renderFountainsOnLayer(layer, items) {
+  if (!layer) return;
+  layer.clearLayers();
+  const icon = L.divIcon({
+    className: '',
+    html: '<span class="fountain-map-marker" aria-hidden="true">🚰</span>',
+    iconSize: [28, 28],
+    iconAnchor: [14, 14]
+  });
+  items.forEach(item => {
+    const name = item.name ? escapeCreatorHtml(item.name) : 'Fuente de agua potable';
+    L.marker([item.lat, item.lon], { icon })
+      .bindTooltip(`<strong>${name}</strong><br><span>Registrada en OpenStreetMap</span>`)
+      .addTo(layer);
+  });
+}
+
+function renderCreatorFountains(items) {
+  renderFountainsOnLayer(creator.fountainsLayer, items);
+}
+
+function scheduleCreatorFountains(rawPoints, immediate = false) {
+  clearTimeout(creatorFountainsTimer);
+  if (!creator.fountainsVisible) return;
+  if (!rawPoints || rawPoints.length < 2) {
+    creator.fountainsLayer?.clearLayers();
+    if (immediate) showCreatorNotice('Crea una ruta para buscar fuentes cercanas.', 'info');
+    return;
+  }
+  const snapshot = rawPoints.map(point => [...point]);
+  creatorFountainsTimer = setTimeout(async () => {
+    const requestId = ++creatorFountainsRequestId;
+    try {
+      const items = await fetchCreatorFountains(snapshot);
+      if (requestId !== creatorFountainsRequestId || !creator.fountainsVisible) return;
+      renderCreatorFountains(items);
+      if (immediate) {
+        showCreatorNotice(items.length
+          ? `${items.length} ${items.length === 1 ? 'fuente encontrada' : 'fuentes encontradas'} junto al recorrido.`
+          : 'No hay fuentes de agua potable registradas junto al recorrido.', 'info');
+      }
+    } catch (error) {
+      if (requestId !== creatorFountainsRequestId) return;
+      console.warn('Creator fountain search error:', error);
+      if (immediate) showCreatorNotice('No se pudieron consultar las fuentes en este momento.', 'warning');
+    }
+  }, immediate ? 0 : 1600);
+}
+
 
 // =============================================
 // 8. STATS & LIVE CHART
@@ -1296,6 +1478,7 @@ function updateCreatorStats() {
   // Render live elevation chart
   renderCreatorChart(allPoints);
   scheduleCreatorSurfaceAnalysis(allPoints);
+  scheduleCreatorFountains(allPoints);
 }
 
 function renderCreatorChart(allPoints) {

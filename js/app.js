@@ -29,6 +29,9 @@ const selectedTrackIds = new Set();
 const historyTracksById = new Map();
 let trackCompareMap = null;
 let trackCompareLayers = [];
+let analysisFountainsLayer = null;
+let analysisFountainsVisible = false;
+let analysisFountainsRequestId = 0;
 
 
 // =============================================
@@ -966,10 +969,23 @@ function initMap() {
 
   osmLayer.addTo(map);
 
+  analysisFountainsLayer = L.layerGroup();
+
   L.control.layers({
     '🗺️ Mapa': osmLayer,
     '🛰️ Satélite': satLayer
-  }, null, { position: 'topright' }).addTo(map);
+  }, {
+    '🚰 Fuentes de agua potable': analysisFountainsLayer
+  }, { position: 'topright' }).addTo(map);
+
+  map.on('overlayadd', event => {
+    if (event.layer !== analysisFountainsLayer) return;
+    analysisFountainsVisible = true;
+    refreshAnalyzedFountains(true);
+  });
+  map.on('overlayremove', event => {
+    if (event.layer === analysisFountainsLayer) analysisFountainsVisible = false;
+  });
 
   mapMarker = L.circleMarker([0, 0], {
     radius: 8,
@@ -1033,6 +1049,29 @@ function updateMap(points) {
 
   window._startMarker = L.marker(latLngs[0], { icon: startIcon }).addTo(map);
   window._endMarker = L.marker(latLngs[latLngs.length - 1], { icon: endIcon }).addTo(map);
+  refreshAnalyzedFountains();
+}
+
+async function refreshAnalyzedFountains(showFeedback = false) {
+  if (!analysisFountainsVisible || !analysisFountainsLayer || !parsedData?.puntos?.length) return;
+  if (typeof fetchCreatorFountains !== 'function' || typeof renderFountainsOnLayer !== 'function') return;
+  const requestId = ++analysisFountainsRequestId;
+  const points = parsedData.puntos.map(point => [point.lat, point.lon, point.ele || 0]);
+  try {
+    const items = await fetchCreatorFountains(points);
+    if (requestId !== analysisFountainsRequestId || !analysisFountainsVisible) return;
+    renderFountainsOnLayer(analysisFountainsLayer, items);
+    if (showFeedback && typeof showCreatorNotice === 'function') {
+      showCreatorNotice(items.length
+        ? `${items.length} ${items.length === 1 ? 'fuente encontrada' : 'fuentes encontradas'} junto al recorrido.`
+        : 'No hay fuentes de agua potable registradas junto al recorrido.', 'info');
+    }
+  } catch (error) {
+    console.warn('Analyzer fountain search error:', error);
+    if (showFeedback && typeof showCreatorNotice === 'function') {
+      showCreatorNotice('No se pudieron consultar las fuentes en este momento.', 'warning');
+    }
+  }
 }
 
 function findNearestTrackPoint(dist) {

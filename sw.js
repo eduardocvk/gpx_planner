@@ -3,7 +3,7 @@
 // Cache-first for app shell, network-first for map tiles
 // =============================================
 
-const CACHE_NAME = 'gpx-tracker-v27';
+const CACHE_NAME = 'gpx-tracker-v28';
 const TILES_CACHE = 'gpx-tracker-tiles-v1';
 const SHARED_GPX_CACHE = 'gpx-tracker-shared-v1';
 const MAX_SHARED_GPX_SIZE = 25 * 1024 * 1024;
@@ -12,10 +12,10 @@ const MAX_TILES = 500;
 const APP_SHELL = [
   './',
   './index.html',
-  './css/style.css?v=27',
-  './js/app.js?v=27',
-  './js/route-replay.js?v=27',
-  './js/track-creator.js?v=27',
+  './css/style.css?v=28',
+  './js/app.js?v=28',
+  './js/route-replay.js?v=28',
+  './js/track-creator.js?v=28',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -95,7 +95,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Bypass Service Worker cache completely for cloud API requests and dynamic data
-  if (url.includes('.supabase.co') || url.includes('openrouteservice.org') || url.includes('nominatim.openstreetmap.org')) {
+  if (url.includes('.supabase.co') || url.includes('openrouteservice.org') || url.includes('nominatim.openstreetmap.org') || url.includes('overpass-api.de') || url.includes('overpass.kumi.systems')) {
     event.respondWith(fetch(event.request));
     return;
   }
