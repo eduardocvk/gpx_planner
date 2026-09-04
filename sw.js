@@ -3,7 +3,7 @@
 // Cache-first for app shell, network-first for map tiles
 // =============================================
 
-const CACHE_NAME = 'gpx-planner-v30';
+const CACHE_NAME = 'gpx-planner-v31';
 const TILES_CACHE = 'gpx-tracker-tiles-v1';
 const SHARED_GPX_CACHE = 'gpx-tracker-shared-v1';
 const MAX_SHARED_GPX_SIZE = 25 * 1024 * 1024;
@@ -12,10 +12,10 @@ const MAX_TILES = 500;
 const APP_SHELL = [
   './',
   './index.html',
-  './css/style.css?v=30',
-  './js/app.js?v=30',
-  './js/route-replay.js?v=30',
-  './js/track-creator.js?v=30',
+  './css/style.css?v=31',
+  './js/app.js?v=31',
+  './js/route-replay.js?v=31',
+  './js/track-creator.js?v=31',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',

@@ -2293,8 +2293,8 @@ function switchToTab(tab) {
   const vistaH = document.getElementById('vistaHistorial');
   const vistaC = document.getElementById('vistaCrear');
 
-  const activeClass = 'px-2.5 py-1 text-xs sm:px-4 sm:py-1.5 sm:text-sm font-bold rounded-md bg-blue-600 text-white transition-all duration-200';
-  const inactiveClass = 'px-2.5 py-1 text-xs sm:px-4 sm:py-1.5 sm:text-sm font-bold rounded-md text-gray-300 hover:text-white hover:bg-slate-600 transition-all duration-200';
+  const activeClass = 'app-nav-button is-active';
+  const inactiveClass = 'app-nav-button';
 
   // Hide all views, deactivate all buttons
   vistaA.classList.add('hidden');
