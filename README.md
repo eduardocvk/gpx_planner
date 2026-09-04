@@ -1,4 +1,6 @@
-# ⛰️ GPX Tracker
+# ⛰️ GPX Planner
+
+Fork experimental del analizador original orientado a una planificación visual de rutas: mapa protagonista, búsqueda de lugares, puntos ordenables y edición directa del recorrido.
 
 Analizador de rutas GPX con mapas interactivos y perfiles altimétricos coloreados por pendiente.
 

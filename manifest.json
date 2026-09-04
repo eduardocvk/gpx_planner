@@ -1,7 +1,7 @@
 {
-  "name": "GPX Tracker",
-  "short_name": "GPX Tracker",
-  "description": "Analizador de rutas GPX con mapas interactivos y perfiles altimétricos",
+  "name": "GPX Planner",
+  "short_name": "GPX Planner",
+  "description": "Planificador y analizador de rutas con mapas interactivos y perfiles altimétricos",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

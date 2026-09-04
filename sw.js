@@ -3,7 +3,7 @@
 // Cache-first for app shell, network-first for map tiles
 // =============================================
 
-const CACHE_NAME = 'gpx-tracker-v29';
+const CACHE_NAME = 'gpx-planner-v30';
 const TILES_CACHE = 'gpx-tracker-tiles-v1';
 const SHARED_GPX_CACHE = 'gpx-tracker-shared-v1';
 const MAX_SHARED_GPX_SIZE = 25 * 1024 * 1024;
@@ -12,10 +12,10 @@ const MAX_TILES = 500;
 const APP_SHELL = [
   './',
   './index.html',
-  './css/style.css?v=29',
-  './js/app.js?v=29',
-  './js/route-replay.js?v=29',
-  './js/track-creator.js?v=29',
+  './css/style.css?v=30',
+  './js/app.js?v=30',
+  './js/route-replay.js?v=30',
+  './js/track-creator.js?v=30',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -23,6 +23,7 @@ const APP_SHELL = [
   'https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4',
   'https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2',
+  'https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
 ];
@@ -41,7 +42,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then(keys =>
       Promise.all(keys
-        .filter(key => key.startsWith('gpx-tracker-v') && key !== CACHE_NAME)
+        .filter(key => (key.startsWith('gpx-tracker-v') || key.startsWith('gpx-planner-v')) && key !== CACHE_NAME)
         .map(key => caches.delete(key)))
     ).then(() => self.clients.claim())
   );

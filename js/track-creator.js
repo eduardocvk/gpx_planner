@@ -14,6 +14,7 @@ const creator = {
   profile: 'cycling-road',
   apiKey: DEFAULT_ORS_KEY,
   waypoints: [],                  // [{lat, lng}] user-placed points
+  waypointMeta: [],               // [{id, label}] stable identity and display name
   routeSegments: [],              // Arrays of [lat, lng, ele] between waypoints
   polyline: null,
   markers: [],
@@ -25,6 +26,7 @@ const creator = {
   surfaceSummary: null,
   fountainsLayer: null,
   fountainsVisible: false,
+  waypointSortable: null,
   deleteMode: false,              // Click a waypoint marker to remove it
   isRouting: false                // Prevent double-clicks while routing
 };
@@ -104,6 +106,7 @@ function initCreator() {
   setupCreatorEvents();
 
   creator.initialized = true;
+  renderWaypointList();
 
   setTimeout(() => {
     if (creator.map) creator.map.invalidateSize();
@@ -136,6 +139,11 @@ function setupCreatorEvents() {
   setupLocationSearch();
   document.getElementById('btnGeolocate')?.addEventListener('click', geolocateUser);
   document.getElementById('btnFitCreatorRoute')?.addEventListener('click', fitCreatorRoute);
+  document.getElementById('btnAddWaypointSearch')?.addEventListener('click', () => {
+    const input = document.getElementById('locationSearch');
+    input?.focus();
+    input?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
 
   // Buttons
   document.getElementById('btnUndo')?.addEventListener('click', undoLastAction);
@@ -200,6 +208,24 @@ function setupLocationSearch() {
   });
 }
 
+async function searchCreatorPlaces(query) {
+  creator.apiKey = creator.apiKey || DEFAULT_ORS_KEY;
+  const params = new URLSearchParams({ api_key: creator.apiKey, text: query, size: '6', lang: 'es' });
+  if (creator.map) {
+    const center = creator.map.getCenter();
+    params.set('focus.point.lat', center.lat.toFixed(6));
+    params.set('focus.point.lon', center.lng.toFixed(6));
+  }
+  const response = await fetch(`https://api.openrouteservice.org/geocode/autocomplete?${params}`);
+  if (!response.ok) throw new Error(`Geocodificación HTTP ${response.status}`);
+  const data = await response.json();
+  return (data.features || []).map(feature => ({
+    lat: Number(feature.geometry?.coordinates?.[1]),
+    lon: Number(feature.geometry?.coordinates?.[0]),
+    label: feature.properties?.label || feature.properties?.name || query
+  })).filter(item => Number.isFinite(item.lat) && Number.isFinite(item.lon));
+}
+
 async function performLocationSearch(query) {
   const searchInput = document.getElementById('locationSearch');
   const resultsContainer = document.getElementById('searchResults');
@@ -208,11 +234,7 @@ async function performLocationSearch(query) {
   if (spinner) spinner.classList.remove('hidden');
 
   try {
-    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=6&addressdetails=1`;
-    const res = await fetch(url, {
-      headers: { 'Accept-Language': 'es' }
-    });
-    const data = await res.json();
+    const data = await searchCreatorPlaces(query);
 
     if (spinner) spinner.classList.add('hidden');
 
@@ -231,12 +253,12 @@ async function performLocationSearch(query) {
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
         </svg>
-        <span class="truncate">${escapeCreatorHtml(item.display_name)}</span>
+        <span class="truncate">${escapeCreatorHtml(item.label)}</span>
       `;
 
       div.addEventListener('click', () => {
-        const lat = parseFloat(item.lat);
-        const lon = parseFloat(item.lon);
+        const lat = item.lat;
+        const lon = item.lon;
 
         if (creator.map) {
           creator.map.flyTo([lat, lon], 14, { duration: 1.5 });
@@ -259,8 +281,9 @@ async function performLocationSearch(query) {
           }, 4000);
         }
 
-        searchInput.value = item.display_name.split(',')[0];
+        searchInput.value = '';
         resultsContainer.classList.add('hidden');
+        addWaypoint(L.latLng(lat, lon), { label: item.label });
       });
 
       resultsContainer.appendChild(div);
@@ -312,11 +335,24 @@ function escapeCreatorHtml(str) {
 // 2. WAYPOINT MANAGEMENT
 // =============================================
 
-async function addWaypoint(latlng) {
+function createWaypointMeta(label = '') {
+  return {
+    id: `wp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    label: label || 'Punto en el mapa'
+  };
+}
+
+function ensureWaypointMeta() {
+  while (creator.waypointMeta.length < creator.waypoints.length) creator.waypointMeta.push(createWaypointMeta());
+  if (creator.waypointMeta.length > creator.waypoints.length) creator.waypointMeta.length = creator.waypoints.length;
+}
+
+async function addWaypoint(latlng, options = {}) {
   // Save snapshot for undo
   pushUndoState();
 
   creator.waypoints.push(latlng);
+  creator.waypointMeta.push(createWaypointMeta(options.label));
 
   if (creator.waypoints.length === 1) {
     // First point — just add marker
@@ -344,12 +380,14 @@ async function addWaypoint(latlng) {
       } else {
         // Routing failed, remove waypoint
         creator.waypoints.pop();
+        creator.waypointMeta.pop();
         creator.undoStack.pop();
       }
     } catch (err) {
       console.error('Routing error:', err);
       showCreatorNotice('No se pudo calcular el tramo. Inténtalo de nuevo o usa el modo manual.', 'warning');
       creator.waypoints.pop();
+      creator.waypointMeta.pop();
       creator.undoStack.pop();
     } finally {
       creator.isRouting = false;
@@ -419,6 +457,8 @@ function addWaypointMarker(latlng, index) {
     pushUndoState();
     const newPos = marker.getLatLng();
     creator.waypoints[index] = newPos;
+    ensureWaypointMeta();
+    creator.waypointMeta[index].label = 'Punto movido en el mapa';
     await recalculateSegmentsAround(index);
   });
 
@@ -881,6 +921,7 @@ function updateMidpoints() {
 
 async function insertWaypointAt(index, latlng) {
   creator.waypoints.splice(index, 0, latlng);
+  creator.waypointMeta.splice(index, 0, createWaypointMeta('Punto añadido sobre la ruta'));
 
   if (creator.mode === 'road' && creator.apiKey) {
     creator.isRouting = true;
@@ -895,6 +936,7 @@ async function insertWaypointAt(index, latlng) {
       alert('Error calculando ruta para el punto insertado: ' + err.message);
       // Rollback
       creator.waypoints.splice(index, 1);
+      creator.waypointMeta.splice(index, 1);
       creator.isRouting = false;
       showRoutingSpinner(false);
       return;
@@ -941,6 +983,7 @@ async function deleteWaypointAt(index) {
   const previousState = creator.undoStack[creator.undoStack.length - 1];
   const oldCount = creator.waypoints.length;
   creator.waypoints.splice(index, 1);
+  creator.waypointMeta.splice(index, 1);
 
   creator.isRouting = true;
   showRoutingSpinner(true);
@@ -972,6 +1015,7 @@ async function deleteWaypointAt(index) {
     console.error('Delete waypoint error:', err);
     creator.undoStack.pop();
     creator.waypoints = previousState.waypoints;
+    creator.waypointMeta = previousState.waypointMeta;
     creator.routeSegments = previousState.routeSegments;
     rebuildAllMarkers();
     rebuildPolyline();
@@ -989,6 +1033,7 @@ function reverseCreatedTrack() {
   pushUndoState();
   setDeletePointMode(false);
   creator.waypoints = [...creator.waypoints].reverse();
+  creator.waypointMeta = [...creator.waypointMeta].reverse();
   creator.routeSegments = [...creator.routeSegments]
     .reverse()
     .map(segment => [...segment].reverse().map(point => [...point]));
@@ -1015,6 +1060,7 @@ function reverseCreatedTrack() {
 function pushUndoState() {
   creator.undoStack.push({
     waypoints: creator.waypoints.map(wp => L.latLng(wp.lat, wp.lng)),
+    waypointMeta: creator.waypointMeta.map(meta => ({ ...meta })),
     routeSegments: creator.routeSegments.map(seg => seg.map(p => [...p]))
   });
 
@@ -1027,6 +1073,7 @@ function undoLastAction() {
 
   const state = creator.undoStack.pop();
   creator.waypoints = state.waypoints;
+  creator.waypointMeta = state.waypointMeta || state.waypoints.map(() => createWaypointMeta());
   creator.routeSegments = state.routeSegments;
 
   // Rebuild everything
@@ -1066,6 +1113,7 @@ async function returnToStart() {
       if (segment && segment.length > 0) {
         creator.routeSegments.push(segment);
         creator.waypoints.push(L.latLng(firstWp.lat, firstWp.lng));
+        creator.waypointMeta.push(createWaypointMeta(creator.waypointMeta[0]?.label || 'Regreso al inicio'));
         rebuildAllMarkers();
         rebuildPolyline();
         updateMidpoints();
@@ -1084,6 +1132,7 @@ async function returnToStart() {
     const seg = [[lastWp.lat, lastWp.lng, 0], [firstWp.lat, firstWp.lng, 0]];
     creator.routeSegments.push(seg);
     creator.waypoints.push(L.latLng(firstWp.lat, firstWp.lng));
+    creator.waypointMeta.push(createWaypointMeta(creator.waypointMeta[0]?.label || 'Regreso al inicio'));
     rebuildAllMarkers();
     rebuildPolyline();
     updateMidpoints();
@@ -1103,6 +1152,7 @@ function clearCreatedTrack() {
   pushUndoState();
 
   creator.waypoints = [];
+  creator.waypointMeta = [];
   creator.routeSegments = [];
   creator.editingTrackId = null;
   creator.surfaceSummary = null;
@@ -1216,6 +1266,7 @@ function editTrackInCreator(track, options = {}) {
 
     // Reset creator state for editing
     creator.waypoints = [];
+    creator.waypointMeta = [];
     creator.routeSegments = [];
     creator.undoStack = [];
     creator.editingTrackId = asCopy ? null : track.id;
@@ -1238,6 +1289,9 @@ function editTrackInCreator(track, options = {}) {
     }
 
     creator.waypoints = selectedIndexes.map(index => L.latLng(points[index].lat, points[index].lon));
+    creator.waypointMeta = selectedIndexes.map((_, index) => createWaypointMeta(
+      index === 0 ? 'Inicio del track' : index === selectedIndexes.length - 1 ? 'Final del track' : `Punto ${index + 1}`
+    ));
 
     // Build segments between waypoints from original detailed points
     creator.routeSegments = [];
@@ -1466,6 +1520,155 @@ function scheduleCreatorFountains(rawPoints, immediate = false) {
   }, immediate ? 0 : 1600);
 }
 
+function getWaypointRole(index) {
+  if (index === 0) return 'Inicio';
+  if (index === creator.waypoints.length - 1) return 'Destino';
+  return `Parada ${index}`;
+}
+
+function renderWaypointList() {
+  const list = document.getElementById('plannerWaypointList');
+  const count = document.getElementById('plannerWaypointCount');
+  if (!list) return;
+  ensureWaypointMeta();
+  if (count) count.textContent = creator.waypoints.length;
+  creator.waypointSortable?.destroy?.();
+  creator.waypointSortable = null;
+
+  if (!creator.waypoints.length) {
+    list.innerHTML = '<p class="planner-waypoints-empty">Busca un lugar o pulsa sobre el mapa para empezar.</p>';
+    return;
+  }
+
+  list.innerHTML = '';
+  creator.waypoints.forEach((waypoint, index) => {
+    const meta = creator.waypointMeta[index];
+    const row = document.createElement('div');
+    row.className = 'planner-waypoint-row';
+    row.dataset.waypointId = meta.id;
+    row.innerHTML = `
+      <button type="button" class="planner-drag-handle" aria-label="Cambiar orden de ${escapeCreatorHtml(meta.label)}" title="Arrastra para cambiar el orden">⋮⋮</button>
+      <span class="planner-waypoint-badge">${indexToLetter(index)}</span>
+      <label class="planner-waypoint-field">
+        <span class="planner-waypoint-role">${getWaypointRole(index)}</span>
+        <input class="planner-waypoint-input" value="${escapeCreatorHtml(meta.label)}" aria-label="${getWaypointRole(index)}: buscar dirección" autocomplete="off">
+      </label>
+      <button type="button" class="planner-waypoint-remove" aria-label="Eliminar ${getWaypointRole(index)}" title="Eliminar punto">×</button>
+      <div class="planner-waypoint-results hidden"></div>`;
+
+    const input = row.querySelector('.planner-waypoint-input');
+    const results = row.querySelector('.planner-waypoint-results');
+    let timer = null;
+    let requestToken = 0;
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      const query = input.value.trim();
+      if (query.length < 3) {
+        results.classList.add('hidden');
+        return;
+      }
+      timer = setTimeout(async () => {
+        const token = ++requestToken;
+        results.classList.remove('hidden');
+        results.innerHTML = '<div class="planner-waypoint-result">Buscando…</div>';
+        try {
+          const places = await searchCreatorPlaces(query);
+          if (token !== requestToken) return;
+          results.innerHTML = places.length
+            ? places.map((place, placeIndex) => `<button type="button" class="planner-waypoint-result" data-place-index="${placeIndex}">${escapeCreatorHtml(place.label)}</button>`).join('')
+            : '<div class="planner-waypoint-result">Sin resultados</div>';
+          results.querySelectorAll('[data-place-index]').forEach(button => {
+            button.addEventListener('click', () => {
+              const place = places[Number(button.dataset.placeIndex)];
+              results.classList.add('hidden');
+              replaceCreatorWaypoint(index, place);
+            });
+          });
+        } catch (error) {
+          if (token === requestToken) results.innerHTML = '<div class="planner-waypoint-result">No se pudo buscar ahora</div>';
+        }
+      }, 350);
+    });
+    input.addEventListener('change', () => {
+      const value = input.value.trim();
+      if (value) creator.waypointMeta[index].label = value;
+    });
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Escape') results.classList.add('hidden');
+    });
+    row.querySelector('.planner-waypoint-remove').addEventListener('click', () => deleteWaypointAt(index));
+    list.appendChild(row);
+  });
+
+  if (window.Sortable && creator.waypoints.length > 1) {
+    creator.waypointSortable = new Sortable(list, {
+      handle: '.planner-drag-handle',
+      animation: 170,
+      ghostClass: 'sortable-ghost',
+      chosenClass: 'sortable-chosen',
+      onEnd: event => reorderCreatorWaypoints(event.oldIndex, event.newIndex)
+    });
+  }
+}
+
+async function replaceCreatorWaypoint(index, place) {
+  if (creator.isRouting || !place || index < 0 || index >= creator.waypoints.length) return;
+  pushUndoState();
+  creator.waypoints[index] = L.latLng(place.lat, place.lon);
+  creator.waypointMeta[index].label = place.label;
+  rebuildAllMarkers();
+  if (creator.waypoints.length > 1) await recalculateSegmentsAround(index);
+  else updateCreatorStats();
+  creator.map?.flyTo([place.lat, place.lon], 14, { duration: 0.8 });
+}
+
+async function rebuildCreatorRouteSegments() {
+  const segments = [];
+  for (let index = 1; index < creator.waypoints.length; index++) {
+    const from = creator.waypoints[index - 1];
+    const to = creator.waypoints[index];
+    if (creator.mode === 'road') segments.push(await fetchRoute(from, to));
+    else segments.push(await enrichElevations(interpolateSegmentPoints(from, to, 0.05)));
+  }
+  creator.routeSegments = segments;
+}
+
+async function reorderCreatorWaypoints(fromIndex, toIndex) {
+  if (creator.isRouting || fromIndex === toIndex || fromIndex == null || toIndex == null) {
+    renderWaypointList();
+    return;
+  }
+  pushUndoState();
+  const previousState = creator.undoStack[creator.undoStack.length - 1];
+  const [waypoint] = creator.waypoints.splice(fromIndex, 1);
+  const [meta] = creator.waypointMeta.splice(fromIndex, 1);
+  creator.waypoints.splice(toIndex, 0, waypoint);
+  creator.waypointMeta.splice(toIndex, 0, meta);
+  creator.isRouting = true;
+  showRoutingSpinner(true);
+  renderWaypointList();
+  try {
+    await rebuildCreatorRouteSegments();
+    rebuildAllMarkers();
+    rebuildPolyline();
+    updateMidpoints();
+    updateCreatorStats();
+  } catch (error) {
+    creator.undoStack.pop();
+    creator.waypoints = previousState.waypoints;
+    creator.waypointMeta = previousState.waypointMeta;
+    creator.routeSegments = previousState.routeSegments;
+    rebuildAllMarkers();
+    rebuildPolyline();
+    updateMidpoints();
+    updateCreatorStats();
+    showCreatorNotice('No se pudo recalcular el nuevo orden.', 'warning');
+  } finally {
+    creator.isRouting = false;
+    showRoutingSpinner(false);
+  }
+}
+
 
 // =============================================
 // 8. STATS & LIVE CHART
@@ -1473,6 +1676,7 @@ function scheduleCreatorFountains(rawPoints, immediate = false) {
 
 function updateCreatorStats() {
   const allPoints = getAllFlatPoints();
+  renderWaypointList();
   let dist = 0;
   let gain = 0;
 

@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#0f172a">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>GPX Tracker - Analizador de Rutas</title>
+  <title>GPX Planner - Planificador de Rutas</title>
 
   <!-- PWA -->
   <link rel="manifest" href="manifest.json">
@@ -34,7 +34,7 @@
   <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 
   <!-- Custom CSS -->
-  <link rel="stylesheet" href="css/style.css?v=29">
+  <link rel="stylesheet" href="css/style.css?v=30">
 </head>
 
 <body class="bg-gray-100 text-gray-800 min-h-screen flex flex-col">
@@ -47,7 +47,7 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
         </svg>
         <div>
-          <p class="font-bold text-sm">Instalar GPX Tracker</p>
+          <p class="font-bold text-sm">Instalar GPX Planner</p>
           <p class="text-xs text-blue-100">Accede más rápido desde tu pantalla de inicio</p>
         </div>
       </div>
@@ -72,7 +72,7 @@
           </svg>
         </div>
         <h1 class="text-lg font-extrabold tracking-tight">
-          GPX <span class="gradient-text">Tracker</span>
+          GPX <span class="gradient-text">Planner</span>
         </h1>
       </div>
       <nav class="flex gap-1 bg-slate-700/50 rounded-lg p-1">
@@ -349,7 +349,14 @@
 
       <!-- Creator Toolbar -->
       <div class="glass-card creator-toolbar-card p-3 rounded-xl shadow-sm">
-        <div class="flex flex-wrap gap-3 items-end justify-between">
+        <div class="planner-sidebar-content flex flex-wrap gap-3 items-end justify-between">
+          <div class="planner-sidebar-heading">
+            <div>
+              <span class="planner-eyebrow">PLANIFICADOR</span>
+              <h2>Diseña tu recorrido</h2>
+            </div>
+            <button id="btnCreatorHelp" type="button" class="creator-toolbar-help" title="Ayuda para crear rutas" aria-label="Ayuda para crear rutas">?</button>
+          </div>
           <!-- Track Name & Action Buttons -->
           <div class="creator-name-actions w-full sm:w-auto flex-1">
             <label for="creatorTrackName" class="block text-xs font-bold text-gray-500 uppercase mb-1 tracking-wider">Nombre del track</label>
@@ -383,9 +390,9 @@
 
           <!-- Location Search -->
           <div class="relative w-full sm:w-56">
-            <label for="locationSearch" class="block text-xs font-bold text-gray-500 uppercase mb-1 tracking-wider">🔍 Buscar lugar inicio</label>
+            <label for="locationSearch" class="block text-xs font-bold text-gray-500 uppercase mb-1 tracking-wider">🔍 Buscar y añadir un lugar</label>
             <div class="relative flex items-center">
-              <input type="text" id="locationSearch" placeholder="Ej: Cercedilla, Navacerrada..." 
+              <input type="text" id="locationSearch" placeholder="Dirección, localidad o lugar..."
                 autocomplete="off"
                 class="w-full bg-gray-50 border border-gray-200 rounded-lg py-1.5 pl-3 pr-9 text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none transition-all">
               <div id="searchSpinner" class="hidden absolute right-2 top-2">
@@ -398,6 +405,17 @@
             <!-- Search Results Dropdown -->
             <div id="searchResults" class="hidden absolute left-0 right-0 top-full mt-1 bg-white rounded-lg shadow-xl border border-gray-100 max-h-60 overflow-y-auto divide-y divide-gray-100 text-xs"></div>
           </div>
+
+          <section class="planner-waypoints-section" aria-labelledby="plannerWaypointsTitle">
+            <div class="planner-section-title">
+              <h3 id="plannerWaypointsTitle">Puntos del recorrido</h3>
+              <span id="plannerWaypointCount">0</span>
+            </div>
+            <div id="plannerWaypointList" class="planner-waypoint-list" aria-live="polite">
+              <p class="planner-waypoints-empty">Busca un lugar o pulsa sobre el mapa para empezar.</p>
+            </div>
+            <button id="btnAddWaypointSearch" type="button" class="planner-add-waypoint">＋ Añadir otro punto</button>
+          </section>
 
           <!-- Mode Toggle -->
           <div class="flex items-center gap-2">
@@ -420,12 +438,11 @@
               <option value="foot-walking">🚶 Caminar / Paseo</option>
             </select>
           </div>
-          <button id="btnCreatorHelp" type="button" class="creator-toolbar-help" title="Ayuda para crear rutas" aria-label="Ayuda para crear rutas">?</button>
         </div>
       </div>
 
       <!-- Creator Map (Full Width) -->
-      <div class="glass-card p-2 rounded-xl shadow-sm relative card-hover">
+      <div class="planner-map-card glass-card p-2 rounded-xl shadow-sm relative card-hover">
         <div id="mapCrear"></div>
 
         <div class="analyzer-location-control">
@@ -485,7 +502,7 @@
       </div>
 
       <!-- Live Stats Bar (Between Map and Profile) -->
-      <div class="glass-card px-4 py-2 rounded-xl shadow-sm flex items-center justify-around text-center">
+      <div class="planner-stats glass-card px-4 py-2 rounded-xl shadow-sm flex items-center justify-around text-center">
         <div>
           <p class="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Distancia</p>
           <p id="creatorDistance" class="font-extrabold text-base sm:text-lg text-blue-600">0.00 km</p>
@@ -502,7 +519,7 @@
         </div>
       </div>
 
-      <section id="creatorSurfaceSection" class="hidden glass-card p-3 rounded-xl shadow-sm fade-in">
+      <section id="creatorSurfaceSection" class="planner-surface hidden glass-card p-3 rounded-xl shadow-sm fade-in">
         <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
           <h3 class="text-xs font-black text-gray-800 uppercase tracking-wider">Superficie estimada</h3>
           <div id="creatorSurfaceStatus" class="text-[10px] font-bold text-gray-500"></div>
@@ -512,7 +529,7 @@
       </section>
 
       <!-- Live Elevation Chart (Below Stats, Full Width) -->
-      <div class="glass-card p-2 rounded-xl shadow-sm card-hover relative">
+      <div class="planner-profile glass-card p-2 rounded-xl shadow-sm card-hover relative">
         <div id="chartCrear"></div>
         <div id="noDataMessageCrear" class="absolute inset-0 flex flex-col items-center justify-center bg-white/90 z-10 rounded-xl">
           <svg class="w-10 h-10 text-gray-200 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -611,13 +628,14 @@
 
   <!-- ===== FOOTER ===== -->
   <footer class="bg-slate-900 text-gray-400 text-center py-3 text-xs">
-    <p>GPX Tracker &copy; 2026 &middot; Datos de mapa: <a href="https://www.openstreetmap.org/copyright" class="underline hover:text-white transition-colors" target="_blank" rel="noopener">OpenStreetMap</a></p>
+    <p>GPX Planner &copy; 2026 &middot; Datos de mapa: <a href="https://www.openstreetmap.org/copyright" class="underline hover:text-white transition-colors" target="_blank" rel="noopener">OpenStreetMap</a></p>
   </footer>
 
   <!-- App Logic (Cache-busted) -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="js/app.js?v=29"></script>
-  <script src="js/route-replay.js?v=29"></script>
-  <script src="js/track-creator.js?v=29"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
+  <script src="js/app.js?v=30"></script>
+  <script src="js/route-replay.js?v=30"></script>
+  <script src="js/track-creator.js?v=30"></script>
 </body>
 </html>
