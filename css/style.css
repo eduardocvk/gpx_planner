@@ -2162,7 +2162,7 @@ input[type="file"]::file-selector-button {
 
 /* Analyzer: map first, details below a usable bottom handle. */
 #appMain:has(#vistaAnalizar:not(.hidden)) { max-width: none; padding: 0; }
-#vistaAnalizar { --analyzer-header: 64px; }
+#vistaAnalizar { --analyzer-header: 64px; scroll-margin-top: var(--analyzer-header); }
 #vistaAnalizar > * { margin-block: 0; }
 .analyzer-map-stage { height: calc(100svh - var(--analyzer-header) - 64px); min-height: 240px; }
 .analyzer-map-stage #map { height: 100%; border-radius: 0; }
