@@ -20,7 +20,7 @@ Analizador de rutas GPX con mapas interactivos y perfiles altimétricos coloread
 - 📱 **PWA instalable** en Android, iOS y escritorio
 - 📶 **Funciona offline** (Service Worker)
 
-El analizador abre el mapa a toda altura. El tirador inferior permite mostrar u ocultar estadísticas, perfil, superficies y subidas; también funciona con teclado y arrastrando.
+El analizador abre el mapa a toda altura. Arrastra el tirador inferior para ajustar libremente el espacio del mapa y de los detalles. Los datos, el perfil, las superficies y las subidas se desplazan dentro del panel sin ocultar el mapa. Con teclado, las flechas arriba y abajo ajustan la altura, Inicio contrae el panel y Fin lo amplía. Pulsar el tirador alterna entre contraído y media pantalla. Guardar ruta está disponible en el menú de opciones (•••).
 
 Las fuentes se consultan en OpenStreetMap en un corredor de 400 m a lo largo de toda la ruta. Se muestran puntos de agua potable y fuentes etiquetadas como potables; la información depende del registro de OSM y no garantiza su estado actual.
 

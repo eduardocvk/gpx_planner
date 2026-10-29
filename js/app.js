@@ -1059,15 +1059,25 @@ function updateMap(points) {
   refreshAnalyzedFountains();
 }
 
-function setAnalyzerDetails(expanded, scroll = true) {
+function setAnalyzerDetailsHeight(height) {
+  const view = document.getElementById('vistaAnalizar');
   const button = document.getElementById('btnAnalyzerDetails');
   const details = document.getElementById('analyzerDetails');
-  if (!button || !details) return;
+  if (!view || !button || !details || !view.clientHeight) return;
+  const minimum = button.offsetHeight;
+  const maximum = Math.max(minimum, view.clientHeight - 120);
+  const nextHeight = Math.max(minimum, Math.min(maximum, height));
+  view.style.setProperty('--details-height', nextHeight + 'px');
+  const expanded = nextHeight > minimum + 1;
   details.classList.toggle('hidden', !expanded);
   button.setAttribute('aria-expanded', String(expanded));
-  button.querySelector('b').textContent = expanded ? 'Ocultar detalles del recorrido' : 'Ver detalles del recorrido';
-  if (chart) requestAnimationFrame(() => chart.resize());
-  if (scroll) (expanded ? button : document.getElementById('vistaAnalizar')).scrollIntoView({ behavior: 'smooth', block: 'start' });
+  button.querySelector('b').textContent = expanded ? 'Arrastra para ajustar los detalles' : 'Ver detalles del recorrido';
+}
+
+function setAnalyzerDetails(expanded) {
+  const view = document.getElementById('vistaAnalizar');
+  const button = document.getElementById('btnAnalyzerDetails');
+  setAnalyzerDetailsHeight(expanded ? view.clientHeight * 0.5 : button.offsetHeight);
 }
 
 async function refreshAnalyzedFountains(showFeedback = false) {
@@ -2412,23 +2422,52 @@ document.addEventListener('DOMContentLoaded', () => {
       loadHistory();
     });
 
-  // File input
+  // Continuous split-panel resizing, with pointer capture for mouse and touch.
   const detailsHandle = document.getElementById('btnAnalyzerDetails');
-  let dragStart = null;
-  let dragged = false;
+  const analyzerView = document.getElementById('vistaAnalizar');
+  const drawer = analyzerView.querySelector('.analyzer-drawer');
+  let drag = null;
+  let suppressClickUntil = 0;
   detailsHandle.addEventListener('click', () => {
-    if (!dragged) setAnalyzerDetails(detailsHandle.getAttribute('aria-expanded') !== 'true');
-    dragged = false;
+    if (performance.now() < suppressClickUntil) return;
+    setAnalyzerDetails(detailsHandle.getAttribute('aria-expanded') !== 'true');
   });
-  detailsHandle.addEventListener('pointerdown', event => { dragStart = event.clientY; dragged = false; detailsHandle.setPointerCapture(event.pointerId); });
-  detailsHandle.addEventListener('pointerup', event => {
-    if (dragStart !== null && Math.abs(event.clientY - dragStart) > 24) {
-      dragged = true;
-      setAnalyzerDetails(event.clientY < dragStart);
-    }
-    dragStart = null;
+  detailsHandle.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || !event.isPrimary) return;
+    drag = { id: event.pointerId, y: event.clientY, height: drawer.getBoundingClientRect().height, moved: false };
+    detailsHandle.setPointerCapture(event.pointerId);
   });
-  detailsHandle.addEventListener('pointercancel', () => { dragStart = null; });
+  detailsHandle.addEventListener('pointermove', event => {
+    if (!drag || event.pointerId !== drag.id) return;
+    if (Math.abs(event.clientY - drag.y) > 3) drag.moved = true;
+    if (drag.moved) setAnalyzerDetailsHeight(drag.height + drag.y - event.clientY);
+  });
+  const finishDrag = event => {
+    if (!drag || event.pointerId !== drag.id) return;
+    if (drag.moved) suppressClickUntil = performance.now() + 350;
+    drag = null;
+  };
+  detailsHandle.addEventListener('pointerup', finishDrag);
+  detailsHandle.addEventListener('pointercancel', finishDrag);
+  detailsHandle.addEventListener('lostpointercapture', finishDrag);
+  detailsHandle.addEventListener('keydown', event => {
+    if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const current = drawer.getBoundingClientRect().height;
+    const height = event.key === 'Home' ? detailsHandle.offsetHeight
+      : event.key === 'End' ? analyzerView.clientHeight - 120
+      : current + (event.key === 'ArrowUp' ? 32 : -32);
+    setAnalyzerDetailsHeight(height);
+  });
+  const analyzerResizeObserver = new ResizeObserver(() => {
+    if (analyzerView.classList.contains('hidden')) return;
+    if (map) map.invalidateSize({ pan: false });
+    if (chart) chart.resize();
+  });
+  analyzerResizeObserver.observe(analyzerView.querySelector('.analyzer-map-stage'));
+  analyzerResizeObserver.observe(document.getElementById('analyzerDetails'));
+
+  // File input
   document.getElementById('gpxFile').addEventListener('change', handleFileSelect);
 
   // Interval change
@@ -2449,7 +2488,10 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Save button
-  document.getElementById('btnGuardar').addEventListener('click', saveCurrentTrack);
+  document.getElementById('btnGuardar').addEventListener('click', () => {
+    closeAnalyzerMenu();
+    saveCurrentTrack();
+  });
 
   // Force sync button
   const forceSyncBtn = document.getElementById('btnForceSync');
