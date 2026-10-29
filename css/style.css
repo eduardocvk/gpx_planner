@@ -2159,3 +2159,18 @@ input[type="file"]::file-selector-button {
   white-space: nowrap;
   line-height: 1.2;
 }
+
+/* Analyzer: map first, details below a usable bottom handle. */
+#appMain:has(#vistaAnalizar:not(.hidden)) { max-width: none; padding: 0; }
+#vistaAnalizar { --analyzer-header: 64px; }
+#vistaAnalizar > * { margin-block: 0; }
+.analyzer-map-stage { height: calc(100svh - var(--analyzer-header) - 64px); min-height: 240px; }
+.analyzer-map-stage #map { height: 100%; border-radius: 0; }
+.analyzer-drawer { position: relative; z-index: 1000; background: #f3f6f2; border-radius: 20px 20px 0 0; box-shadow: 0 -6px 24px #0f172a18; }
+.analyzer-details-handle { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; width: 100%; min-height: 64px; color: #166534; font-size: 12px; touch-action: pan-x; cursor: ns-resize; scroll-margin-top: var(--analyzer-header); }
+.analyzer-details-handle span { width: 44px; height: 5px; border-radius: 9px; background: #a9bcb0; }
+.analyzer-details-handle:focus-visible { outline: 3px solid #168646; outline-offset: -3px; }
+#analyzerDetails { max-width: 1180px; margin: auto; padding: 0 12px 18px; }
+.fountain-status { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 1000; max-width: calc(100% - 130px); padding: 8px 12px; border-radius: 12px; background: #fffffff2; box-shadow: 0 3px 16px #0f172a22; font-size: 12px; }
+.fountain-status:empty { display: none; }
+@media (max-width: 900px) { #vistaAnalizar { --analyzer-header: 58px; } }

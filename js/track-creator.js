@@ -1425,50 +1425,88 @@ function sampleCreatorRoute(rawPoints, maxSamples = 24) {
 }
 
 async function fetchCreatorFountains(rawPoints) {
-  const samples = sampleCreatorRoute(rawPoints);
+  // Keep the complete route corridor, including the middle of sparse segments.
+  const samples = [];
+  rawPoints.forEach((point, index) => {
+    if (!index) { samples.push({ lat: point[0], lon: point[1] }); return; }
+    const previous = rawPoints[index - 1];
+    const steps = Math.max(1, Math.ceil(haversineDistanceCreator(previous[0], previous[1], point[0], point[1]) / 0.5));
+    for (let step = 1; step <= steps; step++) {
+      const lat = previous[0] + (point[0] - previous[0]) * step / steps;
+      const lon = previous[1] + (point[1] - previous[1]) * step / steps;
+      const last = samples[samples.length - 1];
+      if ((step === steps && index === rawPoints.length - 1) || haversineDistanceCreator(last.lat, last.lon, lat, lon) >= 0.2) samples.push({ lat, lon });
+    }
+  });
   if (!samples.length) return [];
-  const first = samples[0];
-  const middle = samples[Math.floor(samples.length / 2)];
-  const last = samples[samples.length - 1];
-  const cacheKey = `fountains:${first.lat.toFixed(3)},${first.lon.toFixed(3)}:${middle.lat.toFixed(3)},${middle.lon.toFixed(3)}:${last.lat.toFixed(3)},${last.lon.toFixed(3)}`;
+  const routeKey = samples.map(point => `${point.lat.toFixed(6)},${point.lon.toFixed(6)}`).join(',');
+  let hash = 2166136261;
+  for (const char of routeKey) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  const cacheKey = `fountains-v2:${samples.length}:${hash >>> 0}`;
   try {
     const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
     if (cached?.items && Date.now() - cached.savedAt < 7 * 24 * 60 * 60 * 1000) return cached.items;
   } catch (_) {}
 
-  const nodeQueries = samples.map(point =>
-    `node(around:400,${point.lat.toFixed(6)},${point.lon.toFixed(6)})["amenity"="drinking_water"];`
-  ).join('\n');
-  const query = `[out:json][timeout:25];(${nodeQueries});out tags;`;
+  const results = new Map();
   const endpoints = [
-    'https://overpass-api.de/api/interpreter',
-    'https://overpass.kumi.systems/api/interpreter'
+    'https://overpass.private.coffee/api/interpreter',
+    'https://overpass-api.de/api/interpreter'
   ];
-  let lastError = null;
-  for (const endpoint of endpoints) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000);
-    try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-        body: `data=${encodeURIComponent(query)}`,
-        signal: controller.signal
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      const items = (data.elements || [])
-        .filter(item => item.type === 'node' && Number.isFinite(item.lat) && Number.isFinite(item.lon))
-        .map(item => ({ id: item.id, lat: item.lat, lon: item.lon, name: item.tags?.name || '' }));
-      try { localStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), items })); } catch (_) {}
-      return items;
-    } catch (error) {
-      lastError = error;
-    } finally {
-      clearTimeout(timeout);
+  // Bounded requests; overlap one point so the corridor is continuous.
+  for (let offset = 0; offset < samples.length; offset += 99) {
+    const batch = samples.slice(offset, offset + 100);
+    const south = Math.min(...batch.map(point => point.lat)) - 0.006;
+    const north = Math.max(...batch.map(point => point.lat)) + 0.006;
+    const lonPadding = 0.006 / Math.max(0.01, Math.cos(Math.max(Math.abs(south), Math.abs(north)) * Math.PI / 180));
+    const bbox = `${Math.max(-90, south)},${Math.max(-180, Math.min(...batch.map(point => point.lon)) - lonPadding)},${Math.min(90, north)},${Math.min(180, Math.max(...batch.map(point => point.lon)) + lonPadding)}`;
+    // Bounding-box lookups are faster than large Overpass around queries.
+    // Filter against the original segments below to retain the 400 m corridor.
+    const query = `[out:json][timeout:25];(nwr(${bbox})["amenity"="drinking_water"]["drinking_water"!="no"];nwr(${bbox})["amenity"="fountain"]["drinking_water"="yes"];nwr(${bbox})["natural"="spring"]["drinking_water"="yes"];);out center body;`;
+    let lastError = null;
+    let completed = false;
+    for (const endpoint of endpoints) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+      try {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+          body: `data=${encodeURIComponent(query)}`,
+          signal: controller.signal
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if (data.remark || !Array.isArray(data.elements)) throw new Error(data.remark || 'Respuesta OSM incompleta');
+        const items = (data.elements || [])
+          .map(item => ({ id: `${item.type}/${item.id}`, lat: item.lat ?? item.center?.lat, lon: item.lon ?? item.center?.lon, name: item.tags?.name || '' }))
+          .filter(item => Number.isFinite(item.lat) && Number.isFinite(item.lon));
+        items.forEach(item => results.set(item.id, item));
+        completed = true;
+        break;
+      } catch (error) {
+        lastError = error;
+      } finally {
+        clearTimeout(timeout);
+      }
     }
+    if (!completed) throw lastError || new Error('OpenStreetMap no respondió');
   }
-  throw lastError || new Error('OpenStreetMap no respondió');
+  const items = [...results.values()].filter(item => {
+    const lonScale = 111.195 * Math.cos(item.lat * Math.PI / 180);
+    const xy = point => [(point[1] - item.lon) * lonScale, (point[0] - item.lat) * 111.195];
+    if (rawPoints.length === 1) return haversineDistanceCreator(item.lat, item.lon, rawPoints[0][0], rawPoints[0][1]) <= 0.4;
+    for (let index = 1; index < rawPoints.length; index++) {
+      const [ax, ay] = xy(rawPoints[index - 1]);
+      const [bx, by] = xy(rawPoints[index]);
+      const dx = bx - ax, dy = by - ay;
+      const t = dx * dx + dy * dy ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / (dx * dx + dy * dy))) : 0;
+      if (Math.hypot(ax + t * dx, ay + t * dy) <= 0.4) return true;
+    }
+    return false;
+  });
+  try { localStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), items })); } catch (_) {}
+  return items;
 }
 
 function renderFountainsOnLayer(layer, items) {
@@ -1494,6 +1532,8 @@ function renderCreatorFountains(items) {
 
 function scheduleCreatorFountains(rawPoints, immediate = false) {
   clearTimeout(creatorFountainsTimer);
+  const requestId = ++creatorFountainsRequestId;
+  creator.fountainsLayer?.clearLayers();
   if (!creator.fountainsVisible) return;
   if (!rawPoints || rawPoints.length < 2) {
     creator.fountainsLayer?.clearLayers();
@@ -1502,20 +1542,18 @@ function scheduleCreatorFountains(rawPoints, immediate = false) {
   }
   const snapshot = rawPoints.map(point => [...point]);
   creatorFountainsTimer = setTimeout(async () => {
-    const requestId = ++creatorFountainsRequestId;
+    showCreatorNotice('Buscando fuentes junto al recorrido…', 'info');
     try {
       const items = await fetchCreatorFountains(snapshot);
       if (requestId !== creatorFountainsRequestId || !creator.fountainsVisible) return;
       renderCreatorFountains(items);
-      if (immediate) {
-        showCreatorNotice(items.length
-          ? `${items.length} ${items.length === 1 ? 'fuente encontrada' : 'fuentes encontradas'} junto al recorrido.`
-          : 'No hay fuentes de agua potable registradas junto al recorrido.', 'info');
-      }
+      showCreatorNotice(items.length
+        ? `${items.length} ${items.length === 1 ? 'fuente encontrada' : 'fuentes encontradas'} junto al recorrido.`
+        : 'No hay fuentes de agua potable registradas junto al recorrido.', 'info');
     } catch (error) {
       if (requestId !== creatorFountainsRequestId) return;
       console.warn('Creator fountain search error:', error);
-      if (immediate) showCreatorNotice('No se pudieron consultar las fuentes en este momento.', 'warning');
+      showCreatorNotice('No se pudieron consultar las fuentes. Desactiva y activa la capa para reintentar.', 'warning');
     }
   }, immediate ? 0 : 1600);
 }

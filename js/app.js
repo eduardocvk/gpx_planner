@@ -984,7 +984,11 @@ function initMap() {
     refreshAnalyzedFountains(true);
   });
   map.on('overlayremove', event => {
-    if (event.layer === analysisFountainsLayer) analysisFountainsVisible = false;
+    if (event.layer === analysisFountainsLayer) {
+      analysisFountainsVisible = false;
+      analysisFountainsRequestId++;
+      document.getElementById('analysisFountainStatus').textContent = '';
+    }
   });
 
   mapMarker = L.circleMarker([0, 0], {
@@ -1049,28 +1053,42 @@ function updateMap(points) {
 
   window._startMarker = L.marker(latLngs[0], { icon: startIcon }).addTo(map);
   window._endMarker = L.marker(latLngs[latLngs.length - 1], { icon: endIcon }).addTo(map);
+  analysisFountainsRequestId++;
+  analysisFountainsLayer?.clearLayers();
+  document.getElementById('analysisFountainStatus').textContent = '';
   refreshAnalyzedFountains();
+}
+
+function setAnalyzerDetails(expanded, scroll = true) {
+  const button = document.getElementById('btnAnalyzerDetails');
+  const details = document.getElementById('analyzerDetails');
+  if (!button || !details) return;
+  details.classList.toggle('hidden', !expanded);
+  button.setAttribute('aria-expanded', String(expanded));
+  button.querySelector('b').textContent = expanded ? 'Ocultar detalles del recorrido' : 'Ver detalles del recorrido';
+  if (chart) requestAnimationFrame(() => chart.resize());
+  if (scroll) (expanded ? button : document.getElementById('vistaAnalizar')).scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 async function refreshAnalyzedFountains(showFeedback = false) {
   if (!analysisFountainsVisible || !analysisFountainsLayer || !parsedData?.puntos?.length) return;
   if (typeof fetchCreatorFountains !== 'function' || typeof renderFountainsOnLayer !== 'function') return;
   const requestId = ++analysisFountainsRequestId;
+  analysisFountainsLayer.clearLayers();
+  const status = document.getElementById('analysisFountainStatus');
+  status.textContent = 'Buscando fuentes junto al recorrido…';
   const points = parsedData.puntos.map(point => [point.lat, point.lon, point.ele || 0]);
   try {
     const items = await fetchCreatorFountains(points);
     if (requestId !== analysisFountainsRequestId || !analysisFountainsVisible) return;
     renderFountainsOnLayer(analysisFountainsLayer, items);
-    if (showFeedback && typeof showCreatorNotice === 'function') {
-      showCreatorNotice(items.length
+    status.textContent = items.length
         ? `${items.length} ${items.length === 1 ? 'fuente encontrada' : 'fuentes encontradas'} junto al recorrido.`
-        : 'No hay fuentes de agua potable registradas junto al recorrido.', 'info');
-    }
+        : 'No hay fuentes de agua potable registradas junto al recorrido.';
   } catch (error) {
     console.warn('Analyzer fountain search error:', error);
-    if (showFeedback && typeof showCreatorNotice === 'function') {
-      showCreatorNotice('No se pudieron consultar las fuentes en este momento.', 'warning');
-    }
+    if (requestId !== analysisFountainsRequestId || !analysisFountainsVisible) return;
+    status.textContent = 'No se pudieron consultar las fuentes. Desactiva y activa la capa para reintentar.';
   }
 }
 
@@ -2395,6 +2413,22 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
   // File input
+  const detailsHandle = document.getElementById('btnAnalyzerDetails');
+  let dragStart = null;
+  let dragged = false;
+  detailsHandle.addEventListener('click', () => {
+    if (!dragged) setAnalyzerDetails(detailsHandle.getAttribute('aria-expanded') !== 'true');
+    dragged = false;
+  });
+  detailsHandle.addEventListener('pointerdown', event => { dragStart = event.clientY; dragged = false; detailsHandle.setPointerCapture(event.pointerId); });
+  detailsHandle.addEventListener('pointerup', event => {
+    if (dragStart !== null && Math.abs(event.clientY - dragStart) > 24) {
+      dragged = true;
+      setAnalyzerDetails(event.clientY < dragStart);
+    }
+    dragStart = null;
+  });
+  detailsHandle.addEventListener('pointercancel', () => { dragStart = null; });
   document.getElementById('gpxFile').addEventListener('change', handleFileSelect);
 
   // Interval change

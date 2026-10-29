@@ -34,7 +34,7 @@
   <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 
   <!-- Custom CSS -->
-  <link rel="stylesheet" href="css/style.css?v=31">
+  <link rel="stylesheet" href="css/style.css?v=34">
 </head>
 
 <body class="bg-gray-100 text-gray-800 min-h-screen flex flex-col">
@@ -95,6 +95,23 @@
     <!-- ===== ANALYZER VIEW ===== -->
     <section id="vistaAnalizar" class="hidden space-y-3 md:space-y-4 fade-in">
 
+        <div class="analyzer-map-stage relative">
+          <div id="map"></div>
+          <div id="analysisFountainStatus" class="fountain-status" role="status" aria-live="polite"></div>
+          <div class="analyzer-location-control">
+            <button id="btnCenterCurrentLocation" type="button" class="analyzer-location-btn analyzer-location-center" title="Ir a mi ubicación" aria-label="Ir a mi ubicación">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>
+            </button>
+            <button id="btnFitAnalyzedRoute" type="button" class="analyzer-location-btn" title="Ver todo el recorrido" aria-label="Ver todo el recorrido">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
+            </button>
+            <div id="trackLocationStatus" class="hidden analyzer-location-status"></div>
+          </div>
+        </div>
+
+      <div class="analyzer-drawer">
+        <button id="btnAnalyzerDetails" type="button" class="analyzer-details-handle" aria-expanded="false" aria-controls="analyzerDetails"><span aria-hidden="true"></span><b>Ver detalles del recorrido</b></button>
+        <div id="analyzerDetails" class="hidden space-y-3 md:space-y-4">
       <!-- Controls Bar -->
       <div class="glass-card p-3 md:p-4 rounded-xl shadow-sm flex flex-wrap gap-3 md:gap-4 items-end justify-between">
         <p class="text-sm font-extrabold text-gray-800">Análisis del recorrido</p>
@@ -155,18 +172,6 @@
 
       <!-- Map + elevation profile -->
       <div class="space-y-3 md:space-y-4">
-        <div class="glass-card p-2 rounded-xl shadow-sm card-hover relative">
-          <div id="map"></div>
-          <div class="analyzer-location-control">
-            <button id="btnCenterCurrentLocation" type="button" class="analyzer-location-btn analyzer-location-center" title="Ir a mi ubicación" aria-label="Ir a mi ubicación">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>
-            </button>
-            <button id="btnFitAnalyzedRoute" type="button" class="analyzer-location-btn" title="Ver todo el recorrido" aria-label="Ver todo el recorrido">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
-            </button>
-            <div id="trackLocationStatus" class="hidden analyzer-location-status"></div>
-          </div>
-        </div>
         <div id="profileCard" class="glass-card p-2 rounded-xl shadow-sm card-hover profile-card">
           <div class="profile-toolbar">
             <div class="flex items-center gap-1.5">
@@ -245,6 +250,8 @@
         </div>
         <div id="climbsList" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5"></div>
       </section>
+        </div>
+      </div>
     </section>
 
     <!-- ===== HISTORY VIEW ===== -->
@@ -634,8 +641,8 @@
   <!-- App Logic (Cache-busted) -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
-  <script src="js/app.js?v=31"></script>
-  <script src="js/route-replay.js?v=31"></script>
-  <script src="js/track-creator.js?v=31"></script>
+  <script src="js/app.js?v=34"></script>
+  <script src="js/route-replay.js?v=34"></script>
+  <script src="js/track-creator.js?v=34"></script>
 </body>
 </html>

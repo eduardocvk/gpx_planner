@@ -20,6 +20,11 @@ Analizador de rutas GPX con mapas interactivos y perfiles altimétricos coloread
 - 📱 **PWA instalable** en Android, iOS y escritorio
 - 📶 **Funciona offline** (Service Worker)
 
+El analizador abre el mapa a toda altura. El tirador inferior permite mostrar u ocultar estadísticas, perfil, superficies y subidas; también funciona con teclado y arrastrando.
+
+Las fuentes se consultan en OpenStreetMap en un corredor de 400 m a lo largo de toda la ruta. Se muestran puntos de agua potable y fuentes etiquetadas como potables; la información depende del registro de OSM y no garantiza su estado actual.
+
+
 ## Escala de pendientes
 
 | Color | Rango | Tipo |
@@ -42,7 +47,7 @@ Analizador de rutas GPX con mapas interactivos y perfiles altimétricos coloread
 
 ## Despliegue
 
-Hospedado en GitHub Pages: [https://eduardocvk.github.io/gpx_analizador/](https://eduardocvk.github.io/gpx_analizador/)
+Hospedado en GitHub Pages: [https://eduardocvk.github.io/gpx_planner/](https://eduardocvk.github.io/gpx_planner/)
 
 La base de datos se versiona mediante las migraciones incluidas en `supabase/migrations`.
 
@@ -57,3 +62,7 @@ Una sincronización automática completa requeriría el [Garmin Connect Develope
 - Aprobación de Garmin para uso empresarial, OAuth 2.0 y un backend seguro. En este proyecto el backend podría implementarse con Supabase Edge Functions; los secretos no deben incluirse en el frontend estático.
 
 Garmin no ofrece una API pública de consumo que permita leer y escribir los recorridos privados de una cuenta personal sin esa aprobación. Como alternativa futura, la API oficial de Strava sí permite listar rutas propias y exportarlas como GPX mediante OAuth.
+
+## Comprobación local
+
+Aplicación estática, sin compilación ni dependencias npm. Servir la raíz con un servidor HTTP local. Las pruebas de regresión se ejecutan con `node --test tests/fountains.test.cjs`.
